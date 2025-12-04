@@ -6,6 +6,10 @@ import torch.nn.functional as F
 # from timm.models.layers import DropPath, trunc_normal_
 from timm.layers import DropPath, trunc_normal_
 
+#######
+# UNITS
+#######
+
 class PixelShuffle1D(nn.Module):
     def __init__(self, upscale_factor):
         super().__init__()
@@ -435,15 +439,18 @@ class DeCTIAbla(nn.Module):
         self.patch_size = patch_size
 
         # split image into non-overlapping patches
+        self.seq_len = seq_len
+        self.model_seq_len = seq_len + self.padding_len(seq_len)
+
         self.patch_embed = PatchEmbed(
-            seq_len=seq_len, patch_size=patch_size, in_chans=embed_dim, embed_dim=embed_dim,
+            seq_len=self.model_seq_len, patch_size=patch_size, in_chans=embed_dim, embed_dim=embed_dim,
             norm_layer=norm_layer if self.patch_norm else None)
         
         self.num_patches = self.patch_embed.num_patches
 
         # merge non-overlapping patches into image
         self.patch_unembed = PatchUnEmbed(
-            seq_len=seq_len, patch_size=patch_size, in_chans=embed_dim, embed_dim=embed_dim,
+            seq_len=self.model_seq_len, patch_size=patch_size, in_chans=embed_dim, embed_dim=embed_dim,
             norm_layer=norm_layer if self.patch_norm else None)
 
         # absolute position embedding
@@ -470,7 +477,7 @@ class DeCTIAbla(nn.Module):
                          drop_path=dpr[sum(depths[:i_layer]):sum(depths[:i_layer + 1])],  # no impact on SR results
                          norm_layer=norm_layer,
                          downsample=None,
-                         seq_len=seq_len,
+                         seq_len=self.model_seq_len,
                          patch_size=patch_size,
                          rpe=rpe, residual=residual
                          )
@@ -491,11 +498,16 @@ class DeCTIAbla(nn.Module):
             nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)  
 
+    def padding_len(self, raw_len):
+        return (self.window_size - raw_len % self.window_size) % self.window_size
+        
     def check_image_size(self, x):
         _, _, seq_len = x.size()
+        assert(seq_len==self.seq_len)
         
-        mod_pad_len = (self.window_size - seq_len % self.window_size) % self.window_size
-        x = F.pad(x, (0, mod_pad_len), 'reflect')
+        expand_len = self.padding_len(seq_len)
+
+        x = F.pad(x, (0, expand_len), 'constant', value=0)
         return x
 
     def forward_features(self, x):
@@ -516,8 +528,7 @@ class DeCTIAbla(nn.Module):
 
     def forward(self, x):
         x = x.permute(1,2,0)    # x: [Input_length, Batch, Channel]-> [Batch, C, Input_length]
-        
-        seq_len = x.shape[2]
+
         x = self.check_image_size(x)
 
         x_first = self.conv_first(x)
@@ -532,6 +543,6 @@ class DeCTIAbla(nn.Module):
                 res = self.upsample(res)
             x = self.conv_last(res)
 
-        x = x[:, :, :seq_len].permute(2,0,1)    # x: [Input_length, Batch, Channel]
+        x = x[:, :, :self.seq_len].permute(2,0,1)    # x: [Input_length, Batch, Channel]
 
         return x
