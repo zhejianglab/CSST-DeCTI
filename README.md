@@ -48,50 +48,88 @@ The rightmost column shows the average time per image, including both computatio
 </div>
 
 ## 4. Dataset
+There are two types of datasets natively supported. There may be more datasets supported in near future.
+
+### HST ACS WFC
 Each model is trained on **public-domain** Hubble Space Telescope (HST) observations from a single year, obtained with the ACS camera using the F814W optical filter. Filenames used for training, validation, and testing are listed in the corresponding files: [train](config/remove_j92t/train.csv)↗ [validation](config/remove_j92t/val.csv)↗ [test](config/remove_j92t/test.csv)↗. The images can be downloaded using their ```observation_id``` via  [astroquery](https://astroquery.readthedocs.io/en/latest/esa/hubble/hubble.html)↗.
 
+### CSST MSC simulation
+The data are generated with image simulation software [CSST_MSC_SIM](https://csst-tb.bao.ac.cn/code/csst-sims/csst_msc_sim). It is based on CSST MSC.
+
 ## 5. Dependency
-All software dependencies required to run the project are listed in [environment.yaml](environment.yaml)↗. To create or update the Conda environment, run the following command:
+Major python packages required to run the project are listed in [requirements.txt](requirements.txt)↗.\
+
+User can use pip to install the required packages:
 
 ```bash
-conda env update -f environment.yaml
-```  
-
-Please note that the environment includes all third-party libraries used in this work, including ```tensorboard```, ```pytorch```, ```numpy```, ```matplotlib```, ```pandas```, ```fitsio```, ```scikit-learn```, ```seaborn```, ```astroquery```, etc, all of which are essential for model development and evaluation. Users are encouraged to respect the respective licenses when using these tools.
-
-## 6. File Structure
-Below is the directory structure of this repository. It provides an overview of the main scripts and configuration files used in the project.
-
-```latex
-csst-DeCTI/
-|
-├── baseline.sh            # Script for training or inference
-├── config                 # Configuration files listing dataset filenames
-│   └── remove_j92t
-│       ├── test.csv
-│       ├── train.csv
-│       └── val.csv
-├── data_provider          # I/O modules for data loading and organization
-│   ├── data_factory.py
-│   ├── data_loader.py
-├── environment.yaml       # Conda environment configuration
-├── LICENSE
-├── main.py                # Main entry point of the project
-├── models                 # Model architectures
-│   ├── DeCTIAbla.py       # Core DeCTI model
-│   ├── DnCNN.py           # Other SOTA methods
-├── pipeline               # Training and evaluation pipelines
-│   ├── exp_basic.py       # Project initialization
-│   ├── exp_main.py        # Main experiment workflow
-├── utils/                 # Utility functions
-│   └── tools.py
-└── README.md
+pip install -r requirements.txt
 ```
 
-## 7. License
+## 6. File Structure
+Below is the directory structure of this repository. It provides an overview of script files used in the project.
+
+```latex
+CSST-DeCTI/
+├── decti
+│   ├── dataset
+│   │   ├── __init__.py
+│   │   ├── loader.py          # load data
+│   │   ├── manager.py         # handle data format
+│   │   └── transform.py       # useful function in data pre-/post-processing
+│   ├── decti.py               # main class for prediction
+│   ├── __init__.py
+│   ├── model    
+│   │   ├── dectiabla.py       # model "DeCTIAbla"
+│   │   ├── dncnn.py           # model "DnCNN"
+│   │   ├── __init__.py
+│   │   └── model.py           # wrapper to initialize model
+│   ├── trainer.py             # main class for training
+│   ├── utils.py               # useful utility functions
+│   └── _version.py
+│   ├── figs                   # figures used in README
+│   │   ├── bias_rratio.pdf
+│   │   ├── bias_rratio.png
+│   │   ├── DeCTI.pdf
+│   │   ├── DeCTI.png
+│   │   ├── flux_aperture.pdf
+│   │   ├── flux_aperture.png
+│   │   ├── flux_kron.pdf
+│   │   ├── flux_kron.png
+│   │   ├── time_consuming.jpeg
+│   │   ├── var_rratio.pdf
+│   │   ├── var_rratio.png
+│   │   ├── vis_gt.pdf
+│   │   ├── vis_gt.png
+│   │   ├── vis_lq.pdf
+│   │   ├── vis_lq.png
+│   │   ├── vis_pr.pdf
+│   │   └── vis_pr.png
+├── LICENSE
+├── pyproject.toml
+├── README.md
+├── requirements.txt
+└── tests                      # useful tests
+    ├── test_predict.py        # an example to predict image without CTI effect
+    └── test_train.py          # an example to train the model
+```
+
+## 7. Usage
+
+Due to large memory requirement in common astronomical datasets, we always use distributed computation in training and batch prediction.
+
+Users are **strongly suggested** to use [torchrun](https://docs.pytorch.org/docs/stable/elastic/run.html) to run the scripts.
+
+The examples in [tests/test_predict.py](tests/test_predict.py) and [tests/test_train.py](tests/test_train.py) are supposed to run with torchrun, such as:
+
+```bash
+torchrun --nproc-per-node 4 test_train.py
+```
+
+## 8. License
 This code repository are licensed under the [Apache License 2.0](https://github.com/zhejianglab/CSST-DeCTI/blob/main/LICENSE). The HST data hosted at MAST used in this work are in the public domain and are free to use. Users should note, however, that other data hosted at MAST may be subject to specific use restrictions, and compliance with any applicable license terms is required.
 
-## 8. Citation and Acknowledgements
+## 9. Citation and Acknowledgements
+
 This work is based on observations made with the **NASA/ESA Hubble Space Telescope**, obtained from the **Mikulski Archive for Space Telescopes (MAST)**. The Space Telescope Science Institute (STScI), which operates the HST and manages the MAST archive, is operated by the Association of Universities for Research in Astronomy, Inc. (AURA) under NASA contract NAS5-26555. STScI provides the scientific support, data processing, and archival services that make HST data publicly accessible.
 
 This work is also supported by the **China Manned Space Program** through its Space Application System.

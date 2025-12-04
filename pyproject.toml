@@ -1,37 +1,35 @@
 [build-system]
-requires = [
-    "setuptools>=61.0",
-    "wheel",
-]
+requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = 'DeCTI'
-dynamic = [
-    'version'
-]
-description = 'A tool to correct image defects due to charge transfer inefficiency in CCD images.'
-readme = 'README.md'
+name = "DeCTI"
+description = "A tool to correct image defects due to charge transfer inefficiency in CCD images."\
+requires-python = ">=3.11"
 authors = [
-    { name = 'Zehua Men', email = '' },
-    { name = 'Li Shao', email = '' },
+    { name = "Zehua Men", email = "" },
+    { name = "Li Shao", email = "" },
 ]
-license = { file = 'LICENSE' }
-requires-python = '>=3.11'
+license = { file = "LICENSE" }
 classifiers = [
-    'License :: OSI Approved :: MIT License',
-    'Operating System :: OS Independent',
-    'Programming Language :: Python :: 3.11',
-    'Programming Language :: Python :: 3.12',
-    'Topic :: Scientific/Engineering'
+    "Development Status :: 3 - Alpha",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Intended Audience :: Scientific/Research",
+    "Topic :: Scientific/Engineering :: Astronomy"
 ]
+dynamic = ["readme", "version", "dependencies"]
 
 [tool.setuptools]
 include-package-data = true
 
 [tool.setuptools.packages.find]
 include = ["decti", "decti.*"]
+exclude = ["tests", "figs"]
 namespaces = false
 
 [tool.setuptools.dynamic]
-version = { attr = "decti._version.__version__" }
+readme = { file = ["README.md"], content-type = "text/markdown" }
+version = { attr = "decti.__version__" }
+dependencies = { file = ["requirements.txt"] }
