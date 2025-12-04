@@ -1,3 +1,6 @@
+from ._version import __version__
 from .decti import DeCTI
 from .trainer import Trainer
-from .dataset import Data_Manager, load_manager
+from .dataset import DataManager, load_manager
+
+__all__ = ["__version__", "DeCTI", "Trainer", "DataManager", "load_manager"]

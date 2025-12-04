@@ -4,10 +4,10 @@ from astropy.time import Time
 
 from .transform import log_normalize, log_normalize_reverse
 
-__all__ = ["Data_Manager", "Data_HST_ACS_WFC", "Data_CSST_MSC_SIM"]
+__all__ = ["DataManager", "load_manager", "Data_HST_ACS_WFC", "Data_CSST_MSC_SIM"]
 
 
-class Data_Manager:
+class DataManager:
 
     def __init__(self, name, nx, ny):
 
@@ -15,28 +15,28 @@ class Data_Manager:
         self.nx = nx
         self.ny = ny
 
-    def read(self):
+    def read(self, path, **kwargs):
 
         raise NotImplementedError
 
-    def write(self):
+    def write(self, data, path, **kwargs):
 
         raise NotImplementedError
 
-    def pre_process(self):
+    def pre_process(self, data):
 
         raise NotImplementedError
 
-    def post_process(self):
+    def post_process(self, data):
 
         raise NotImplementedError
-    
+
     def __str__(self):
 
         return 'data type: "{}", nx = {}, ny = {}'.format(self.name, self.nx, self.ny)
 
 
-class Data_HST_ACS_WFC(Data_Manager):
+class Data_HST_ACS_WFC(DataManager):
 
     def __init__(self):
 
@@ -58,14 +58,18 @@ class Data_HST_ACS_WFC(Data_Manager):
 
         return data, mjd_60k, texp
 
-    def write(self, data, path):
+    def write(self, data, path, overwrite=False, verbose=False):
 
         ny = data.shape[0] // 2
-        hdulist = [fits.PrimaryHDU(), ]
+        hdulist = [
+            fits.PrimaryHDU(),
+        ]
         hdulist += [fits.ImageHDU(data[:ny, :]), fits.ImageHDU(), fits.ImageHDU()]
         hdulist += [fits.ImageHDU(data[ny:, :]), fits.ImageHDU(), fits.ImageHDU()]
         hdulist = fits.HDUList(hdulist)
-        hdulist.writeto(path, overwrite=True)
+        hdulist.writeto(path, overwrite=overwrite)
+        if verbose:
+            print("output has written to {}, in format of {}".format(path, self.name))
 
     def pre_process(self, data):
 
@@ -79,7 +83,7 @@ class Data_HST_ACS_WFC(Data_Manager):
         return log_normalize_reverse(data, self.vmin, self.vmax, self.tau)
 
 
-class Data_CSST_MSC_SIM(Data_Manager):
+class Data_CSST_MSC_SIM(DataManager):
 
     def __init__(self):
 
@@ -100,12 +104,13 @@ class Data_CSST_MSC_SIM(Data_Manager):
 
         return data, mjd_60k, texp
 
-    def write(self, data, path):
+    def write(self, data, path, overwrite=False, verbose=False):
 
         hdulist = [fits.PrimaryHDU(), fits.ImageHDU(data)]
         hdulist = fits.HDUList(hdulist)
-        hdulist.writeto(path, overwrite=True)
-        print("output has written to {}, in format of {}".format(path, self.name))
+        hdulist.writeto(path, overwrite=overwrite)
+        if verbose:
+            print("output has written to {}, in format of {}".format(path, self.name))
 
     def pre_process(self, data):
 

@@ -1,4 +1,3 @@
-
 import glob
 from decti.dataset import load_manager
 from decti.trainer import Trainer

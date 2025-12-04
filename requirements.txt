@@ -1,0 +1,5 @@
+astropy>=6.0.0
+matplotlib>=3.8.0
+numpy>=1.26.0
+timm>=1.0.22
+torch>=2.2.1

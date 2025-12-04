@@ -7,16 +7,14 @@ import torch
 import torch.nn as nn
 import torch.distributed as dist
 from torch.optim.lr_scheduler import OneCycleLR
-from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.nn.parallel import DistributedDataParallel
 from torch.utils.tensorboard import SummaryWriter
 import matplotlib
 from matplotlib import pyplot as plt
 
 from .model import make_model
-from .dataset import Data_Manager, load_manager, load_data
-
-
-matplotlib.use('agg')
+from .dataset import DataManager, load_manager, load_data
+from .utils import setup_dist_env
 
 
 class Trainer:
@@ -25,11 +23,12 @@ class Trainer:
         self,
         input_paths: list[str],
         target_paths: list[str],
-        data_manager: Data_Manager | str = 'csst_msc_sim',
+        data_manager: DataManager | str = "csst_msc_sim",
         model_param: str | dict = None,
         validate_ratio=0.1,
         loader_workers=2,
         batch_size=16,
+        find_unused_parameters=False,
         master_addr="localhost",
         master_port="12345",
         backend="nccl",
@@ -48,22 +47,27 @@ class Trainer:
         # data manager
         if type(data_manager) is str:
             self.data_manager = load_manager(name=data_manager)
-        elif issubclass(type(data_manager), Data_Manager):
+        elif issubclass(type(data_manager), DataManager):
             self.data_manager = data_manager
         else:
-            raise Exception('Invalid data_manager')
-        if self.model_par['model_name'] == 'dectiabla' and self.model_par['data_length'] != self.data_manager.ny:
-            raise Exception('model data_length does not match data_manager.ny')
+            raise Exception("Invalid data_manager")
+        if (
+            self.model_par["model_name"] == "dectiabla"
+            and self.model_par["data_length"] != self.data_manager.ny
+        ):
+            raise Exception("model data_length does not match data_manager.ny")
 
         # input file lists
         self.input_paths = input_paths
         self.target_paths = target_paths
         if len(self.input_paths) != len(self.target_paths):
-            raise Exception('input_paths and target_paths must have the same length')
+            raise Exception("input_paths and target_paths must have the same length")
 
         # dataset separation
         self.validate_ratio = validate_ratio
-        self.input_tr, self.target_tr, self.input_va, self.target_va = self._init_lists(file_shuffle_seed)
+        self.input_tr, self.target_tr, self.input_va, self.target_va = self._init_lists(
+            file_shuffle_seed
+        )
 
         # training optimization
         self.loader_workers = loader_workers
@@ -71,34 +75,37 @@ class Trainer:
 
         # parallelization settings
         if not torch.cuda.is_available():
-            raise Exception('Not GPU available')
-        if not self._check_dist_env():
-            os.environ['WORLD_SIZE'] = '1'
-            os.environ['RANK'] = '0'
-            os.environ['LOCAL_RANK'] = '0'
-            os.environ['MASTER_ADDR'] = str(master_addr)
-            os.environ['MASTER_PORT'] = str(master_port)
-        if int(os.environ['WORLD_SIZE']) < 1:
-            raise Exception('Invalid init_process_group parameter')
-        self.world_size = int(os.environ['WORLD_SIZE'])
-        self.rank = int(os.environ['RANK'])
-        self.local_rank = max(int(os.environ.get('LOCAL_RANK', -1)), 0)
-        
+            raise Exception("Not GPU available")
+        self.world_size, self.rank, self.local_rank = setup_dist_env(
+            master_addr=master_addr, master_port=master_port
+        )
+
         # initialize parallelization
         dist.init_process_group(backend=backend)
         if not dist.is_initialized():
-            raise Exception('process group not properly initialized at rank {}'.format(self.rank))
+            raise Exception(
+                "process group not properly initialized at rank {}".format(self.rank)
+            )
 
         # assign model to device
-        self.device = torch.device('cuda:{}'.format(self.local_rank))
+        self.device = torch.device("cuda:{}".format(self.local_rank))
         self.model = self.model.to(self.device)
         dist.barrier()
         self.model = nn.SyncBatchNorm.convert_sync_batchnorm(self.model)
-        self.model = DDP(self.model, device_ids=[self.device], find_unused_parameters=True)
+        self.model = DistributedDataParallel(
+            self.model,
+            device_ids=[self.local_rank],
+            find_unused_parameters=find_unused_parameters,
+        )
 
         # random seed
         self.random_seed = random_seed
         self._init_seeds()
+
+        # useful output
+        self.train_losses = list()
+        self.validate_losses = list()
+        self.best_epoch = None
 
     def _init_lists(self, seed):
 
@@ -121,18 +128,6 @@ class Trainer:
 
         return input_tr, target_tr, input_va, target_va
 
-    def _check_dist_env(self):
-
-        for k in ['WORLD_SIZE', 'RANK', 'LOCAL_RANK', 'MASTER_ADDR', 'MASTER_PORT']:
-            if k not in os.environ:
-                return False
-        if int(os.environ['WORLD_SIZE']) < 1:
-            return False
-        if int(os.environ['RANK']) < 0 or int(os.environ['LOCAL_RANK']) < 0:
-            return False
-
-        return True
-
     def _init_seeds(self):
 
         seed = self.random_seed + self.rank
@@ -148,20 +143,25 @@ class Trainer:
         # safely destroy process group
         if dist.is_initialized():
             dist.destroy_process_group()
-            print('Trainer process group at Rank {} is safely cleaned up.'.format(self.rank))
+            print(
+                "Trainer process group at Rank {} is safely cleaned up.".format(
+                    self.rank
+                )
+            )
 
     def train(
-            self,
-            n_epochs=50,
-            learning_rate=0.0001,
-            loss_function="mse",
-            optimizer='Adamax',
-            pct_start=0.3,
-            patience=10,
-            delta=0.0,
-            save_epoch_step=5,
-            log_path="./log",
-            verbose=True):
+        self,
+        n_epochs=50,
+        learning_rate=0.0001,
+        loss_function="mse",
+        optimizer="Adamax",
+        pct_start=0.3,
+        patience=10,
+        delta=0.0,
+        save_epoch_step=5,
+        log_path="./log",
+        verbose=True,
+    ):
 
         if self.rank == 0:
             if not os.path.exists(log_path):
@@ -169,9 +169,19 @@ class Trainer:
         dist.barrier()
 
         _, tr_loader, tr_sampler = load_data(
-            self.data_manager, self.input_tr, self.target_tr, train=True, num_workers=self.loader_workers)
+            self.data_manager,
+            self.input_tr,
+            self.target_tr,
+            train=True,
+            num_workers=self.loader_workers,
+        )
         _, va_loader, va_sampler = load_data(
-            self.data_manager, self.input_va, self.target_va, train=True, num_workers=self.loader_workers)
+            self.data_manager,
+            self.input_va,
+            self.target_va,
+            train=True,
+            num_workers=self.loader_workers,
+        )
 
         # optimizer
         if optimizer == "Adamax":
@@ -193,9 +203,9 @@ class Trainer:
         train_steps = len(tr_loader) * nbatch_per_img
         total_steps = int(train_steps * n_epochs)
         if self.rank == 0 and verbose:
-            print(f'number of batches per image: {nbatch_per_img}')
-            print(f'total number of batches: {train_steps}')
-            print(f'total number of steps: {total_steps}')
+            print(f"number of batches per image: {nbatch_per_img}")
+            print(f"total number of batches: {train_steps}")
+            print(f"total number of steps: {total_steps}")
 
         scheduler = OneCycleLR(
             optimizer=model_optim,
@@ -204,9 +214,14 @@ class Trainer:
             max_lr=learning_rate,
         )
 
+        early_stopping = None
         if self.rank == 0:
             early_stopping = EarlyStopping(
-                patience=patience, delta=delta, save_epoch_step=save_epoch_step, verbose=verbose)
+                patience=patience,
+                delta=delta,
+                save_epoch_step=save_epoch_step,
+                verbose=verbose,
+            )
             writer = SummaryWriter(log_dir=log_path, filename_suffix="")
             if verbose:
                 print("training start!")
@@ -215,8 +230,7 @@ class Trainer:
 
         i_step = 0
         lr = learning_rate
-        tr_losses = []
-        va_losses = []
+        self.train_losses, self.validate_losses = list(), list()
         for epoch in range(n_epochs):
 
             train_loss = []
@@ -225,7 +239,9 @@ class Trainer:
             if tr_sampler is not None:
                 tr_sampler.set_epoch(epoch)
 
-            for idx, (img_input, path_input, _, img_target, path_target) in enumerate(tr_loader):
+            for idx, (img_input, path_input, _, img_target, path_target) in enumerate(
+                tr_loader
+            ):
 
                 img_input = torch.squeeze(img_input, dim=0)
                 img_target = torch.squeeze(img_target, dim=0)
@@ -251,10 +267,20 @@ class Trainer:
 
                         if self.rank == 0 and i_step % 50 == 0:
                             if verbose:
-                                print("\titer: {0}/{1}, epoch: {2}/{3} | loss: {4:.7f}  lr: {5:.7f}".format(
-                                    i_step, total_steps, epoch + 1, n_epochs, loss.item(), lr))
+                                print(
+                                    "\titer: {0}/{1}, epoch: {2}/{3} | loss: {4:.7f}  lr: {5:.7f}".format(
+                                        i_step,
+                                        total_steps,
+                                        epoch + 1,
+                                        n_epochs,
+                                        loss.item(),
+                                        lr,
+                                    )
+                                )
                                 if mean_loss > 5.0:
-                                    print(f"bad loss img_path: {path_input} {path_target}")
+                                    print(
+                                        f"bad loss img_path: {path_input} {path_target}"
+                                    )
                                     print(f"patch_id: {i_in_img}   lr: {str(lr)}")
                                 sys.stdout.flush()
                             writer.add_scalar("train_loss_step", mean_loss, i_step)
@@ -275,7 +301,7 @@ class Trainer:
             epoch_loss_tensor = torch.tensor([epoch_loss_mean]).to(self.device)
             dist.all_reduce(epoch_loss_tensor)
             train_loss = epoch_loss_tensor.item() / self.world_size
-            tr_losses.append(train_loss)
+            self.train_losses.append(train_loss)
 
             # loss of vali
             val_loss = self.validate(
@@ -285,7 +311,7 @@ class Trainer:
                 writer=writer,
                 epoch=int(epoch + 1),
             )
-            va_losses.append(val_loss)
+            self.validate_losses.append(val_loss)
 
             # earlystop check & loss conclusion
             stop_train = torch.tensor([0]).to(self.device)
@@ -293,21 +319,30 @@ class Trainer:
                 writer.add_scalar("train_loss_epoch", train_loss, epoch + 1)
                 writer.add_scalar("val_loss_epoch", val_loss, epoch + 1)
                 if verbose:
-                    print("Epoch {0}: Train Loss = {1:.7f}, Validate Loss = {2:.7f}".format(
-                        epoch + 1, train_loss, val_loss))
-                early_stopping(val_loss, self.model.module.state_dict(), log_path, epoch + 1)
-                stop_train = torch.tensor([int(early_stopping.early_stop)]).to(self.device)
+                    print(
+                        "Epoch {0}: Train Loss = {1:.7f}, Validate Loss = {2:.7f}".format(
+                            epoch + 1, train_loss, val_loss
+                        )
+                    )
+                early_stopping(
+                    val_loss, self.model.module.state_dict(), log_path, epoch + 1
+                )
+                stop_train = torch.tensor([int(early_stopping.early_stop)]).to(
+                    self.device
+                )
             dist.broadcast(stop_train, src=0)
             if stop_train.item():
                 if verbose:
-                    print("Early stopping: best model is at epoch {}".format(early_stopping.best_epoch + 1))
+                    print(
+                        "Early stopping: best model is at epoch {}".format(
+                            early_stopping.best_epoch + 1
+                        )
+                    )
                 break
 
+        self.best_epoch = early_stopping.best_epoch
         self.load_checkpoint("{}/best_model.pth".format(log_path))
-        self.plot_loss(tr_losses, va_losses, "{}/loss.png".format(log_path),
-            best_epoch=early_stopping.best_epoch + 1)
-
-        return tr_losses, va_losses, early_stopping.best_epoch
+        self.plot_loss("{}/loss.png".format(log_path))
 
     def validate(self, data_loader, criterion, sampler, writer, epoch):
 
@@ -324,7 +359,7 @@ class Trainer:
 
                 for i_in_img in range(nbatch_per_img):
                     i_step += 1
-                    if not sampler == None:
+                    if sampler is not None:
                         sampler.set_epoch(i_step)
 
                     col_start = i_in_img * self.batch_size
@@ -351,24 +386,33 @@ class Trainer:
 
     def load_checkpoint(self, path):
 
-        state_dict = torch.load(path, map_location='cpu')
+        state_dict = torch.load(path, map_location="cpu")
         state_dict_module = dict()
         for k, v in state_dict.items():
-            state_dict_module['module.{}'.format(k)] = v
+            state_dict_module["module.{}".format(k)] = v
         self.model.load_state_dict(state_dict_module, strict=True)
 
-    def plot_loss(self, train_losses, validate_losses, output_path, best_epoch=-1):
+    def plot_loss(self, output_path, matplotlib_device="agg"):
 
-        x = np.arange(len(train_losses))
+        matplotlib.use(matplotlib_device)
+        x = np.arange(len(self.train_losses)) + 1
         plt.figure(figsize=(8, 6))
-        plt.plot(x, train_losses, marker='o', color='green', zorder=3)
-        plt.plot(x, validate_losses, marker='+', color='red', zorder=3)
-        if 1 < best_epoch < len(train_losses):
+        (l1,) = plt.plot(x, self.train_losses, marker="o", color="green", zorder=3)
+        (l2,) = plt.plot(x, self.validate_losses, marker="+", color="red", zorder=3)
+        if 0 < self.best_epoch < len(self.train_losses):
             ylim = plt.gca().get_ylim()
-            plt.plot([best_epoch, best_epoch], ylim, c='orange', lw=2, ls='--', zorder=2)
+            plt.plot(
+                [self.best_epoch + 1, self.best_epoch + 1],
+                ylim,
+                c="orange",
+                lw=2,
+                ls="--",
+                zorder=2,
+            )
             plt.ylim(ylim)
-        plt.xlabel('Epoch')
-        plt.ylabel('Loss')
+        plt.legend([l1, l2], ["train", "validate"])
+        plt.xlabel("Epoch")
+        plt.ylabel("Loss")
         plt.tight_layout()
         plt.savefig(output_path)
         plt.close()
@@ -377,16 +421,18 @@ class Trainer:
 
         if self.rank == 0:
             name = re.sub(r".pth$", "", output_path)
-            state_dict_cpu = {k: v.cpu() for k, v in self.model.module.state_dict().items()}
-            torch.save(state_dict_cpu, name + '.state.pth')
-            torch.save(self.model_par, name + '.param.pkl')
+            state_dict_cpu = {
+                k: v.cpu() for k, v in self.model.module.state_dict().items()
+            }
+            torch.save(state_dict_cpu, name + ".state.pth")
+            torch.save(self.model_par, name + ".param.pkl")
         dist.barrier()
 
 
 class EarlyStopping:
 
     def __init__(self, patience=7, delta=0.0, save_epoch_step=5, verbose=False):
-        
+
         self.patience = patience
         self.delta = delta
         self.save_epoch_step = save_epoch_step
@@ -398,19 +444,27 @@ class EarlyStopping:
         self.early_stop = False
 
     def __call__(self, val_loss, state_dict, logdir, epoch):
-        
+
         if epoch % self.save_epoch_step == 0:
             torch.save(state_dict, "{}/checkpoint_epoch_{}.pth".format(logdir, epoch))
-        
+
         if val_loss > self.val_loss_min - self.delta:
             self.counter += 1
             if self.verbose:
-                print('Epoch {}: stopping counter {} out of {}'.format(epoch, self.counter, self.patience))
+                print(
+                    "Epoch {}: stopping counter {} out of {}".format(
+                        epoch, self.counter, self.patience
+                    )
+                )
             if self.counter >= self.patience:
                 self.early_stop = True
         else:
             if self.verbose:
-                print('Epoch {}: validate loss decreases {:.6f} --> {:.6f}'.format(epoch, self.val_loss_min, val_loss))
+                print(
+                    "Epoch {}: validate loss decreases {:.6f} --> {:.6f}".format(
+                        epoch, self.val_loss_min, val_loss
+                    )
+                )
             torch.save(state_dict, "{}/best_model.pth".format(logdir))
             self.best_epoch = epoch
             self.val_loss_min = val_loss
