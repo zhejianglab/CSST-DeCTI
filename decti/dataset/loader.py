@@ -1,7 +1,7 @@
 import os
 import numpy as np
 import torch
-from collections import Callable
+from typing import Callable
 from torch.utils.data import Dataset, DataLoader
 from astropy.io import fits
 
