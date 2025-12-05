@@ -1,5 +1,7 @@
 import os
 
+__all__ = ['check_dist_env', 'setup_dist_env']
+
 
 def check_dist_env():
 
@@ -14,7 +16,9 @@ def check_dist_env():
     return True
 
 
-def setup_dist_env(master_addr="localhost", master_port="12345"):
+def setup_dist_env(master_addr: str = "localhost",
+                   master_port: str = "12345",
+                   ):
 
     if not check_dist_env():
         os.environ["WORLD_SIZE"] = "1"

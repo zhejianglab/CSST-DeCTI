@@ -1,21 +1,25 @@
 import os
 import numpy as np
 import torch
+from collections import Callable
 from torch.utils.data import Dataset, DataLoader
 from astropy.io import fits
+
+from .manager import DataManager
+
+__all__ = ['DatasetPairedImageFiles', 'load_data']
 
 
 class DatasetPairedImageFiles(Dataset):
 
-    def __init__(
-        self,
-        input_paths,
-        target_paths,
-        train=True,
-        read_func=None,
-        proc_func=None,
-        **kwargs,
-    ):
+    def __init__(self,
+                 input_paths: list[str],
+                 target_paths: list[str],
+                 train: bool = True,
+                 read_func: Callable = None,
+                 proc_func: Callable = None,
+                 **kwargs,
+                 ):
 
         self.input_paths = input_paths
         self.target_paths = target_paths
@@ -63,23 +67,22 @@ class DatasetPairedImageFiles(Dataset):
         return input_data, input_path, meta, target_data, target_path
 
 
-def load_data(
-    data_style,
-    input_paths,
-    target_paths,
-    train=True,
-    distributed=True,
-    world_size=1,
-    rank=0,
-    num_workers=1,
-):
+def load_data(data_manager: DataManager,
+              input_paths: list[str],
+              target_paths: list[str],
+              train: bool = True,
+              distributed: bool = True,
+              world_size: int = 1,
+              rank: int = 0,
+              num_workers: int = 1,
+              ):
 
     data_set = DatasetPairedImageFiles(
         input_paths,
         target_paths,
         train=train,
-        read_func=data_style.read,
-        proc_func=data_style.pre_process,
+        read_func=data_manager.read,
+        proc_func=data_manager.pre_process,
     )
 
     if distributed:
@@ -91,12 +94,7 @@ def load_data(
         )  # make each image as 1 batch
     else:
         sampler = None
-        data_loader = DataLoader(
-            data_set,
-            batch_size=1,
-            sampler=sampler,
-            num_workers=num_workers,
-            shuffle=train,
-        )
+        data_loader = DataLoader(data_set, batch_size=1, sampler=sampler,
+                                 num_workers=num_workers, shuffle=train)
 
     return data_set, data_loader, sampler

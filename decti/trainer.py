@@ -16,25 +16,26 @@ from .model import make_model
 from .dataset import DataManager, load_manager, load_data
 from .utils import setup_dist_env
 
+__all__ = ['Trainer']
+
 
 class Trainer:
 
-    def __init__(
-        self,
-        input_paths: list[str],
-        target_paths: list[str],
-        data_manager: DataManager | str = "csst_msc_sim",
-        model_param: str | dict = None,
-        validate_ratio=0.1,
-        loader_workers=2,
-        batch_size=16,
-        find_unused_parameters=False,
-        master_addr="localhost",
-        master_port="12345",
-        backend="nccl",
-        random_seed=0,
-        file_shuffle_seed=2025,
-    ):
+    def __init__(self,
+                 input_paths: list[str],
+                 target_paths: list[str],
+                 data_manager: DataManager | str = "csst_msc_sim",
+                 model_param: str | dict = None,
+                 validate_ratio: float = 0.1,
+                 loader_workers: int = 2,
+                 batch_size: int = 16,
+                 find_unused_parameters: bool = False,
+                 master_addr: str = "localhost",
+                 master_port: str = "12345",
+                 backend: str = "nccl",
+                 random_seed: int = 0,
+                 file_shuffle_seed: int = 2025,
+                 ):
 
         # model
         if model_param is None:
@@ -83,20 +84,15 @@ class Trainer:
         # initialize parallelization
         dist.init_process_group(backend=backend)
         if not dist.is_initialized():
-            raise Exception(
-                "process group not properly initialized at rank {}".format(self.rank)
-            )
+            raise Exception("process group not initialized at rank {}".format(self.rank))
 
         # assign model to device
         self.device = torch.device("cuda:{}".format(self.local_rank))
         self.model = self.model.to(self.device)
         dist.barrier()
         self.model = nn.SyncBatchNorm.convert_sync_batchnorm(self.model)
-        self.model = DistributedDataParallel(
-            self.model,
-            device_ids=[self.local_rank],
-            find_unused_parameters=find_unused_parameters,
-        )
+        self.model = DistributedDataParallel(self.model, device_ids=[self.local_rank],
+            find_unused_parameters=find_unused_parameters)
 
         # random seed
         self.random_seed = random_seed
@@ -105,7 +101,7 @@ class Trainer:
         # useful output
         self.train_losses = list()
         self.validate_losses = list()
-        self.best_epoch = None
+        self.best_epoch = -1
 
     def _init_lists(self, seed):
 
@@ -143,52 +139,36 @@ class Trainer:
         # safely destroy process group
         if dist.is_initialized():
             dist.destroy_process_group()
-            print(
-                "Trainer process group at Rank {} is safely cleaned up.".format(
-                    self.rank
-                )
-            )
+            print("Trainer process group at Rank {} is safely cleaned up.".format(self.rank))
 
-    def train(
-        self,
-        n_epochs=50,
-        learning_rate=0.0001,
-        loss_function="mse",
-        optimizer="Adamax",
-        pct_start=0.3,
-        patience=10,
-        delta=0.0,
-        save_epoch_step=5,
-        log_path="./log",
-        verbose=True,
-    ):
+    def train(self,
+              n_epochs: int = 50,
+              learning_rate: float = 0.0001,
+              loss_function: str = "mse",
+              optimizer: str = "Adamax",
+              pct_start: float = 0.3,
+              patience: int = 10,
+              delta: float = 0.0,
+              save_epoch_step: int = 5,
+              log_path: str = "./log",
+              verbose: bool = True,
+              ):
 
         if self.rank == 0:
             if not os.path.exists(log_path):
                 os.makedirs(log_path)
         dist.barrier()
 
-        _, tr_loader, tr_sampler = load_data(
-            self.data_manager,
-            self.input_tr,
-            self.target_tr,
-            train=True,
-            num_workers=self.loader_workers,
-        )
-        _, va_loader, va_sampler = load_data(
-            self.data_manager,
-            self.input_va,
-            self.target_va,
-            train=True,
-            num_workers=self.loader_workers,
-        )
+        _, tr_loader, tr_sampler = load_data(self.data_manager, self.input_tr, self.target_tr,
+                                             train=True, num_workers=self.loader_workers)
+        _, va_loader, va_sampler = load_data(self.data_manager, self.input_va, self.target_va,
+                                             train=True, num_workers=self.loader_workers)
 
         # optimizer
         if optimizer == "Adamax":
             model_optim = torch.optim.Adamax(
                 [p for p in self.model.parameters() if p.requires_grad == True],
-                lr=learning_rate,
-            )
+                lr=learning_rate)
         else:
             model_optim = torch.optim.Adam(self.model.parameters(), lr=learning_rate)
 
@@ -207,21 +187,13 @@ class Trainer:
             print(f"total number of batches: {train_steps}")
             print(f"total number of steps: {total_steps}")
 
-        scheduler = OneCycleLR(
-            optimizer=model_optim,
-            total_steps=total_steps,
-            pct_start=pct_start,
-            max_lr=learning_rate,
-        )
+        scheduler = OneCycleLR(optimizer=model_optim, total_steps=total_steps,
+            pct_start=pct_start, max_lr=learning_rate)
 
         early_stopping = None
         if self.rank == 0:
-            early_stopping = EarlyStopping(
-                patience=patience,
-                delta=delta,
-                save_epoch_step=save_epoch_step,
-                verbose=verbose,
-            )
+            early_stopping = EarlyStopping(patience=patience, delta=delta,
+                save_epoch_step=save_epoch_step, verbose=verbose)
             writer = SummaryWriter(log_dir=log_path, filename_suffix="")
             if verbose:
                 print("training start!")
@@ -231,6 +203,7 @@ class Trainer:
         i_step = 0
         lr = learning_rate
         self.train_losses, self.validate_losses = list(), list()
+        best_epoch = torch.tensor([0]).to(self.device)
         for epoch in range(n_epochs):
 
             train_loss = []
@@ -239,12 +212,10 @@ class Trainer:
             if tr_sampler is not None:
                 tr_sampler.set_epoch(epoch)
 
-            for idx, (img_input, path_input, _, img_target, path_target) in enumerate(
-                tr_loader
-            ):
+            for idx, (img_in, path_in, _, img_ta, path_ta) in enumerate(tr_loader):
 
-                img_input = torch.squeeze(img_input, dim=0)
-                img_target = torch.squeeze(img_target, dim=0)
+                img_in = torch.squeeze(img_in, dim=0)
+                img_ta = torch.squeeze(img_ta, dim=0)
 
                 for i_in_img in range(nbatch_per_img):
                     i_step += 1
@@ -252,12 +223,11 @@ class Trainer:
                     col_start = i_in_img * self.batch_size
                     col_end = col_start + self.batch_size
                     model_optim.zero_grad()
-                    batch_input = img_input[:, col_start:col_end, :].to(self.device)
-                    batch_target = img_target[:, col_start:col_end, :].to(self.device)
+                    batch_in = img_in[:, col_start:col_end, :].to(self.device)
+                    batch_ta = img_ta[:, col_start:col_end, :].to(self.device)
 
                     # calculate loss
-                    batch_output = self.model(batch_input)
-                    loss = criterion(batch_output, batch_target)
+                    loss = criterion(self.model(batch_in), batch_ta)
                     train_loss.append(loss.item())
 
                     if (i_step - 1) % 1 == 0:
@@ -267,21 +237,11 @@ class Trainer:
 
                         if self.rank == 0 and i_step % 50 == 0:
                             if verbose:
-                                print(
-                                    "\titer: {0}/{1}, epoch: {2}/{3} | loss: {4:.7f}  lr: {5:.7f}".format(
-                                        i_step,
-                                        total_steps,
-                                        epoch + 1,
-                                        n_epochs,
-                                        loss.item(),
-                                        lr,
-                                    )
-                                )
+                                print("\titer: {0}/{1}, epoch: {2}/{3} | loss: {4:.7f}  lr: {5:.7f}".format(
+                                    i_step, total_steps, epoch + 1, n_epochs, loss.item(), lr))
                                 if mean_loss > 5.0:
-                                    print(
-                                        f"bad loss img_path: {path_input} {path_target}"
-                                    )
-                                    print(f"patch_id: {i_in_img}   lr: {str(lr)}")
+                                    print(f"bad loss img_path: {path_in} {path_ta}")
+                                    print(f"patch_id: {i_in_img}  learning rate: {str(lr)}")
                                 sys.stdout.flush()
                             writer.add_scalar("train_loss_step", mean_loss, i_step)
 
@@ -304,13 +264,8 @@ class Trainer:
             self.train_losses.append(train_loss)
 
             # loss of vali
-            val_loss = self.validate(
-                va_loader,
-                criterion,
-                sampler=va_sampler,
-                writer=writer,
-                epoch=int(epoch + 1),
-            )
+            val_loss = self.validate(va_loader, criterion,
+                                     sampler=va_sampler, writer=writer, epoch=int(epoch + 1),)
             self.validate_losses.append(val_loss)
 
             # earlystop check & loss conclusion
@@ -319,30 +274,24 @@ class Trainer:
                 writer.add_scalar("train_loss_epoch", train_loss, epoch + 1)
                 writer.add_scalar("val_loss_epoch", val_loss, epoch + 1)
                 if verbose:
-                    print(
-                        "Epoch {0}: Train Loss = {1:.7f}, Validate Loss = {2:.7f}".format(
-                            epoch + 1, train_loss, val_loss
-                        )
-                    )
-                early_stopping(
-                    val_loss, self.model.module.state_dict(), log_path, epoch + 1
-                )
-                stop_train = torch.tensor([int(early_stopping.early_stop)]).to(
-                    self.device
-                )
+                    print("Epoch {0}: Train Loss = {1:.7f}, Validate Loss = {2:.7f}".format(
+                        epoch + 1, train_loss, val_loss))
+                early_stopping(val_loss, self.model.module.state_dict(), log_path, epoch + 1)
+                stop_train = torch.tensor([int(early_stopping.early_stop)]).to(self.device)
+                best_epoch = torch.tensor([int(early_stopping.best_epoch)]).to(self.device)
             dist.broadcast(stop_train, src=0)
+            dist.broadcast(best_epoch, src=0)
             if stop_train.item():
                 if verbose:
-                    print(
-                        "Early stopping: best model is at epoch {}".format(
-                            early_stopping.best_epoch + 1
-                        )
-                    )
+                    print("Early stopping: best model is at epoch {}".format(
+                        early_stopping.best_epoch + 1))
                 break
 
-        self.best_epoch = early_stopping.best_epoch
+        self.best_epoch = best_epoch.item()
         self.load_checkpoint("{}/best_model.pth".format(log_path))
-        self.plot_loss("{}/loss.png".format(log_path))
+        if self.rank == 0:
+            self.plot_loss("{}/loss.png".format(log_path))
+        dist.barrier()
 
     def validate(self, data_loader, criterion, sampler, writer, epoch):
 
@@ -352,10 +301,10 @@ class Trainer:
         self.model.eval()
         with torch.no_grad():
             i_step = 0
-            for idx, (img_input, _, _, img_target, _) in enumerate(data_loader):
+            for idx, (img_in, _, _, img_ta, _) in enumerate(data_loader):
 
-                img_input = torch.squeeze(img_input, dim=0)
-                img_target = torch.squeeze(img_target, dim=0)
+                img_in = torch.squeeze(img_in, dim=0)
+                img_ta = torch.squeeze(img_ta, dim=0)
 
                 for i_in_img in range(nbatch_per_img):
                     i_step += 1
@@ -364,12 +313,11 @@ class Trainer:
 
                     col_start = i_in_img * self.batch_size
                     col_end = col_start + self.batch_size
-                    batch_input = img_input[:, col_start:col_end, :].to(self.device)
-                    batch_target = img_target[:, col_start:col_end, :].to(self.device)
+                    batch_in = img_in[:, col_start:col_end, :].to(self.device)
+                    batch_ta = img_ta[:, col_start:col_end, :].to(self.device)
 
                     # encoder - decoder
-                    outputs = self.model(batch_input)
-                    loss = criterion(outputs, batch_target).detach().cpu()
+                    loss = criterion(self.model(batch_in), batch_ta).detach().cpu()
 
                     if writer is not None:
                         writer.add_scalar(f"val_loss step epoch:{epoch}", loss, i_step)
@@ -379,7 +327,6 @@ class Trainer:
         epoch_loss_tensor = torch.tensor([epoch_loss]).to(self.device)
         dist.all_reduce(epoch_loss_tensor)
         epoch_loss = epoch_loss_tensor.item() / self.world_size
-
         self.model.train()
 
         return epoch_loss
@@ -392,7 +339,10 @@ class Trainer:
             state_dict_module["module.{}".format(k)] = v
         self.model.load_state_dict(state_dict_module, strict=True)
 
-    def plot_loss(self, output_path, matplotlib_device="agg"):
+    def plot_loss(self,
+                  output_path: str,
+                  matplotlib_device: str = "agg",
+                  ):
 
         matplotlib.use(matplotlib_device)
         x = np.arange(len(self.train_losses)) + 1
@@ -401,14 +351,7 @@ class Trainer:
         (l2,) = plt.plot(x, self.validate_losses, marker="+", color="red", zorder=3)
         if 0 < self.best_epoch < len(self.train_losses):
             ylim = plt.gca().get_ylim()
-            plt.plot(
-                [self.best_epoch + 1, self.best_epoch + 1],
-                ylim,
-                c="orange",
-                lw=2,
-                ls="--",
-                zorder=2,
-            )
+            plt.plot([self.best_epoch + 1] * 2, ylim, c="orange", lw=2, ls="--", zorder=2)
             plt.ylim(ylim)
         plt.legend([l1, l2], ["train", "validate"])
         plt.xlabel("Epoch")
@@ -417,14 +360,14 @@ class Trainer:
         plt.savefig(output_path)
         plt.close()
 
-    def save(self, output_path):
+    def save(self,
+             output_path: str,
+             ):
 
         if self.rank == 0:
             name = re.sub(r".pth$", "", output_path)
-            state_dict_cpu = {
-                k: v.cpu() for k, v in self.model.module.state_dict().items()
-            }
-            torch.save(state_dict_cpu, name + ".state.pth")
+            state_dict = {k: v.cpu() for k, v in self.model.module.state_dict().items()}
+            torch.save(state_dict, name + ".state.pth")
             torch.save(self.model_par, name + ".param.pkl")
         dist.barrier()
 
@@ -451,20 +394,14 @@ class EarlyStopping:
         if val_loss > self.val_loss_min - self.delta:
             self.counter += 1
             if self.verbose:
-                print(
-                    "Epoch {}: stopping counter {} out of {}".format(
-                        epoch, self.counter, self.patience
-                    )
-                )
+                print("Epoch {}: stopping counter {} out of {}".format(
+                    epoch, self.counter, self.patience))
             if self.counter >= self.patience:
                 self.early_stop = True
         else:
             if self.verbose:
-                print(
-                    "Epoch {}: validate loss decreases {:.6f} --> {:.6f}".format(
-                        epoch, self.val_loss_min, val_loss
-                    )
-                )
+                print("Epoch {}: validate loss decreases {:.6f} --> {:.6f}".format(
+                    epoch, self.val_loss_min, val_loss))
             torch.save(state_dict, "{}/best_model.pth".format(logdir))
             self.best_epoch = epoch
             self.val_loss_min = val_loss

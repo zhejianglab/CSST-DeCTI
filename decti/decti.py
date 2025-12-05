@@ -13,12 +13,11 @@ __all__ = ["DeCTI"]
 
 class DeCTI:
 
-    def __init__(
-        self,
-        model_param: str | dict = None,
-        model_state: str | dict = None,
-        data_manager: DataManager | str = "csst_msc_sim",
-    ):
+    def __init__(self,
+                 model_param: str | dict = None,
+                 model_state: str | dict = None,
+                 data_manager: DataManager | str = "csst_msc_sim",
+                 ):
 
         # model
         if model_param is None:
@@ -47,7 +46,11 @@ class DeCTI:
         ):
             raise Exception("model data_length does not match data_manager.ny")
 
-    def predict(self, image, batch_size=0, device="cpu"):
+    def predict(self,
+                image: np.ndarray,
+                batch_size: int = 0,
+                device: str = "cpu",
+                ):
 
         model = self.model.to(device)
         model.eval()
@@ -64,41 +67,38 @@ class DeCTI:
                 if image.shape[1] > nbatch_per_img * batch_size:
                     nbatch_per_img += 1
 
-            img_input = self.data_manager.pre_process(image)
-            img_input = np.expand_dims(img_input, axis=-1)
-            img_input = torch.as_tensor(img_input.astype(np.float32)).to(device)
+            img_in = self.data_manager.pre_process(image)
+            img_in = np.expand_dims(img_in, axis=-1)
+            img_in = torch.as_tensor(img_in.astype(np.float32)).to(device)
 
             for i_in_img in range(nbatch_per_img):
                 col_start = i_in_img * batch_size
                 col_end = col_start + batch_size
 
-                batch_input = img_input[:, col_start:col_end, :]
-                batch_output = model(batch_input)
+                batch_in = img_in[:, col_start:col_end, :]
+                batch_out = model(batch_in)
 
                 if i_in_img == 0:
-                    img_output = torch.squeeze(batch_output, axis=-1)
+                    img_out = torch.squeeze(batch_out, axis=-1)
                 else:
-                    img_output = torch.cat(
-                        [img_output, torch.squeeze(batch_output, axis=-1)], axis=1
-                    )
+                    img_out = torch.cat([img_out, torch.squeeze(batch_out, axis=-1)], axis=1)
 
-        img_output = img_output.to("cpu").numpy()
-        img_output = self.data_manager.post_process(img_output)
+        img_out = img_out.to("cpu").numpy()
+        img_out = self.data_manager.post_process(img_out)
 
-        return img_output
+        return img_out
 
-    def batch_predict(
-        self,
-        input_paths,
-        output_paths,
-        loader_workers=1,
-        batch_size=256,
-        use_gpu=True,
-        master_addr="localhost",
-        master_port="12345",
-        backend="nccl",
-        verbose=True,
-    ):
+    def batch_predict(self,
+                      input_paths: list[str],
+                      output_paths: list[str],
+                      loader_workers: int = 1,
+                      batch_size: int = 256,
+                      use_gpu: bool = True,
+                      master_addr: str = "localhost",
+                      master_port: str = "12345",
+                      backend: str = "nccl",
+                      verbose: bool = True,
+                      ):
 
         # parallelization settings
         if use_gpu and torch.cuda.is_available():
@@ -107,23 +107,16 @@ class DeCTI:
             print("Use CPU")
             backend = "gloo"
         _, rank, local_rank = setup_dist_env(
-            master_addr=master_addr, master_port=master_port
-        )
+            master_addr=master_addr, master_port=master_port)
 
         try:
             # initialize parallelization
             dist.init_process_group(backend=backend, init_method="env://")
             if not dist.is_initialized():
-                raise Exception(
-                    "process group not properly initialized at rank {}".format(rank)
-                )
+                raise Exception("process group not initialized at rank {}".format(rank))
 
             # assign model to device
-            device = (
-                torch.device("cuda:{}".format(local_rank))
-                if use_gpu
-                else torch.device("cpu")
-            )
+            device = torch.device("cuda:{}".format(local_rank)) if use_gpu else torch.device("cpu")
             ddp_model = self.model.to(device)
             dist.barrier()
             ddp_model = DistributedDataParallel(ddp_model, device_ids=[local_rank])
@@ -131,13 +124,8 @@ class DeCTI:
 
             # load data
             dist.barrier()
-            _, ev_loader, _ = load_data(
-                self.data_manager,
-                input_paths,
-                output_paths,
-                train=False,
-                num_workers=loader_workers,
-            )
+            _, ev_loader, _ = load_data(self.data_manager, input_paths, output_paths,
+                    train=False, num_workers=loader_workers)
 
             # cut into batches
             nbatch_per_img = self.data_manager.nx // batch_size
@@ -146,35 +134,26 @@ class DeCTI:
 
             # loop for each image
             with torch.no_grad():
-                for idx, (img_input, _, _, _, path_output) in enumerate(ev_loader):
+                for idx, (img_in, _, _, _, path_out) in enumerate(ev_loader):
 
-                    img_input = torch.squeeze(img_input, dim=0)
+                    img_in = torch.squeeze(img_in, dim=0)
 
                     for i_in_img in range(nbatch_per_img):
                         col_start = i_in_img * batch_size
                         col_end = col_start + batch_size
-                        batch_input = img_input[:, col_start:col_end, :]
-                        batch_output = ddp_model(batch_input)
+                        batch_in = img_in[:, col_start:col_end, :]
+                        batch_out = ddp_model(batch_in)
 
                         if i_in_img == 0:
-                            img_output = torch.squeeze(batch_output, dim=-1)
+                            img_out = torch.squeeze(batch_out, dim=-1)
                         else:
-                            img_output = torch.cat(
-                                [img_output, torch.squeeze(batch_output, dim=-1)], dim=1
-                            )
+                            img_out = torch.cat([img_out, torch.squeeze(batch_out, dim=-1)], dim=1)
 
-                    img_output = self.data_manager.post_process(
-                        img_output.to("cpu").numpy()
-                    )
-                    self.data_manager.write(
-                        img_output, path_output[0], overwrite=True, verbose=verbose
-                    )
+                    img_out = self.data_manager.post_process(img_out.to("cpu").numpy())
+                    self.data_manager.write(img_out, path_out[0], overwrite=True, verbose=verbose)
                     if verbose and rank == 0:
-                        print(
-                            "image {}/{} processed at rank {}".format(
-                                idx + 1, len(ev_loader), rank
-                            )
-                        )
+                        print("image {}/{} processed at rank {}".format(
+                                idx + 1, len(ev_loader), rank))
                         sys.stdout.flush()
 
         finally:

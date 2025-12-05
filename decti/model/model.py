@@ -1,16 +1,17 @@
 from .dncnn import DnCNN
 from .dectiabla import DeCTIAbla
 
+__all__ = ['make_model']
 
-def make_model(
-    model_name="DeCTIAbla",
-    data_length=9232,
-    window_size=64,
-    abla_rpe=1,
-    abla_ape=1,
-    abla_residual=1,
-    abla_patch_size=1,
-):
+
+def make_model(model_name: str = "DeCTIAbla",
+               data_length: int = 9232,
+               window_size: int = 64,
+               abla_rpe: int = 1,
+               abla_ape: int = 1,
+               abla_residual: int = 1,
+               abla_patch_size: int = 1,
+               ):
 
     name = model_name.lower()
     if name == "dncnn":
