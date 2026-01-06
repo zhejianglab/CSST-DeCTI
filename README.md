@@ -95,14 +95,3 @@ This code repository are licensed under the [Apache License 2.0](https://github.
 This work is based on observations made with the **NASA/ESA Hubble Space Telescope**, obtained from the **Mikulski Archive for Space Telescopes (MAST)**. The Space Telescope Science Institute (STScI), which operates the HST and manages the MAST archive, is operated by the Association of Universities for Research in Astronomy, Inc. (AURA) under NASA contract NAS5-26555. STScI provides the scientific support, data processing, and archival services that make HST data publicly accessible.
 
 This work is also supported by the **China Manned Space Program** through its Space Application System.
-
-If you use this work in your research, please cite the following paper:
-```latex
-@article{Men2025ChargeTransfer,
-  author  = {Z. Men, L. Shao, P. Smirnov, M. Duan},
-  title   = {DeCTI: Transformer-based Charge Transfer Inefficiency correction},
-  journal = {IEEE Transactions on Image Processing},
-  note    = {under review},
-  year    = {2025}
-}
-```
