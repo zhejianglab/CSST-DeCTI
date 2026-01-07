@@ -1,17 +1,18 @@
 from .dncnn import DnCNN
 from .dectiabla import DeCTIAbla
 
-__all__ = ['make_model']
+__all__ = ["make_model"]
 
 
-def make_model(model_name: str = "DeCTIAbla",
-               data_length: int = 9232,
-               window_size: int = 64,
-               abla_rpe: int = 1,
-               abla_ape: int = 1,
-               abla_residual: int = 1,
-               abla_patch_size: int = 1,
-               ):
+def make_model(
+    model_name: str = "DeCTIAbla",
+    data_length: int = 9232,
+    window_size: int = 64,
+    abla_rpe: int = 1,
+    abla_ape: int = 1,
+    abla_residual: int = 1,
+    abla_patch_size: int = 1,
+):
 
     name = model_name.lower()
     if name == "dncnn":
@@ -32,8 +33,15 @@ def make_model(model_name: str = "DeCTIAbla",
             rpe=abla_rpe,
             residual=abla_residual,
         )
-        params = {"model_name": name, "data_length": data_length, "window_size": window_size, "abla_rpe": abla_rpe,
-                  "abla_ape": abla_ape, "abla_residual": abla_residual, "abla_patch_size": abla_patch_size}
+        params = {
+            "model_name": name,
+            "data_length": data_length,
+            "window_size": window_size,
+            "abla_rpe": abla_rpe,
+            "abla_ape": abla_ape,
+            "abla_residual": abla_residual,
+            "abla_patch_size": abla_patch_size,
+        }
 
     else:
         raise Exception("Invalid model name: {}".format(model_name))

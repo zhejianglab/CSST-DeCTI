@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "DeCTI"
-description = "A tool to correct image defects due to charge transfer inefficiency in CCD images."\
+description = "A tool to correct image defects due to charge transfer inefficiency in CCD images."
 requires-python = ">=3.11"
 authors = [
     { name = "Zehua Men", email = "" },

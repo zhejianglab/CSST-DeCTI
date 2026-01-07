@@ -9,11 +9,12 @@ __all__ = ["DataManager", "load_manager", "Data_HST_ACS_WFC", "Data_CSST_MSC_SIM
 
 class DataManager:
 
-    def __init__(self,
-                 name: str,
-                 nx: int,
-                 ny: int,
-                 ):
+    def __init__(
+        self,
+        name: str,
+        nx: int,
+        ny: int,
+    ):
 
         self.name = name
         self.nx = nx
@@ -49,10 +50,11 @@ class Data_HST_ACS_WFC(DataManager):
         self.vmax = 60000.0
         self.tau = 100.0
 
-    def read(self,
-             path: str,
-             header_only: bool = False,
-             ):
+    def read(
+        self,
+        path: str,
+        header_only: bool = False,
+    ):
 
         with fits.open(path) as f:
             timestr = "{}T{}".format(f[0].header["DATE-OBS"], f[0].header["TIME-OBS"])
@@ -65,15 +67,20 @@ class Data_HST_ACS_WFC(DataManager):
 
         return data, mjd_60k, texp
 
-    def write(self,
-              data: np.ndarray,
-              path: str,
-              overwrite: bool = False,
-              verbose: bool = False,
-              ):
+    def write(
+        self,
+        data: np.ndarray,
+        path: str,
+        overwrite: bool = False,
+        verbose: bool = False,
+    ):
 
         ny = data.shape[0] // 2
-        hdulist = [fits.PrimaryHDU(), ] + [fits.ImageHDU(), ] * 6
+        hdulist = [
+            fits.PrimaryHDU(),
+        ] + [
+            fits.ImageHDU(),
+        ] * 6
         hdulist = fits.HDUList(hdulist)
         hdulist[0].data = data[:ny, :]
         hdulist[3].data = data[ny:, :]
@@ -81,18 +88,17 @@ class Data_HST_ACS_WFC(DataManager):
         if verbose:
             print("output has written to {}, in format of {}".format(path, self.name))
 
-    def pre_process(self,
-                    data: np.ndarray,
-                    ):
+    def pre_process(
+        self,
+        data: np.ndarray,
+    ):
 
         data = np.clip(data, a_min=self.vmin, a_max=self.vmax)
         data = log_normalize(data, self.vmin, self.vmax, self.tau)
 
         return data
 
-    def post_process(self,
-                     data: np.ndarray
-                     ):
+    def post_process(self, data: np.ndarray):
 
         return log_normalize_reverse(data, self.vmin, self.vmax, self.tau)
 
@@ -106,10 +112,11 @@ class Data_CSST_MSC_SIM(DataManager):
         self.vmax = 100000.0
         self.tau = 100.0
 
-    def read(self,
-             path: str,
-             header_only: bool = False,
-             ):
+    def read(
+        self,
+        path: str,
+        header_only: bool = False,
+    ):
 
         with fits.open(path) as f:
             mjd_60k = Time(f[0].header["DATE-OBS"]).mjd - 60000
@@ -121,12 +128,13 @@ class Data_CSST_MSC_SIM(DataManager):
 
         return data, mjd_60k, texp
 
-    def write(self,
-              data: np.ndarray,
-              path: str,
-              overwrite: bool = False,
-              verbose: bool = False,
-              ):
+    def write(
+        self,
+        data: np.ndarray,
+        path: str,
+        overwrite: bool = False,
+        verbose: bool = False,
+    ):
 
         hdulist = fits.HDUList([fits.PrimaryHDU(), fits.ImageHDU()])
         hdulist[1].data = data
@@ -134,24 +142,27 @@ class Data_CSST_MSC_SIM(DataManager):
         if verbose:
             print("output has written to {}, in format of {}".format(path, self.name))
 
-    def pre_process(self,
-                    data: np.ndarray,
-                    ):
+    def pre_process(
+        self,
+        data: np.ndarray,
+    ):
 
         data = np.clip(data, a_min=self.vmin, a_max=self.vmax)
         data = log_normalize(data, self.vmin, self.vmax, self.tau)
 
         return data
 
-    def post_process(self,
-                     data: np.ndarray,
-                     ):
+    def post_process(
+        self,
+        data: np.ndarray,
+    ):
 
         return log_normalize_reverse(data, self.vmin, self.vmax, self.tau)
 
 
-def load_manager(name: str = "csst_msc_sim",
-                 ):
+def load_manager(
+    name: str = "csst_msc_sim",
+):
 
     if name.lower() == "csst_msc_sim":
         output = Data_CSST_MSC_SIM()

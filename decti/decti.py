@@ -13,11 +13,12 @@ __all__ = ["DeCTI"]
 
 class DeCTI:
 
-    def __init__(self,
-                 model_param: str | dict = None,
-                 model_state: str | dict = None,
-                 data_manager: DataManager | str = "csst_msc_sim",
-                 ):
+    def __init__(
+        self,
+        model_param: str | dict = None,
+        model_state: str | dict = None,
+        data_manager: DataManager | str = "csst_msc_sim",
+    ):
 
         # model
         if model_param is None:
@@ -46,11 +47,12 @@ class DeCTI:
         ):
             raise Exception("model data_length does not match data_manager.ny")
 
-    def predict(self,
-                image: np.ndarray,
-                batch_size: int = 0,
-                device: str = "cpu",
-                ):
+    def predict(
+        self,
+        image: np.ndarray,
+        batch_size: int = 0,
+        device: str = "cpu",
+    ):
 
         model = self.model.to(device)
         model.eval()
@@ -81,24 +83,27 @@ class DeCTI:
                 if i_in_img == 0:
                     img_out = torch.squeeze(batch_out, axis=-1)
                 else:
-                    img_out = torch.cat([img_out, torch.squeeze(batch_out, axis=-1)], axis=1)
+                    img_out = torch.cat(
+                        [img_out, torch.squeeze(batch_out, axis=-1)], axis=1
+                    )
 
         img_out = img_out.to("cpu").numpy()
         img_out = self.data_manager.post_process(img_out)
 
         return img_out
 
-    def batch_predict(self,
-                      input_paths: list[str],
-                      output_paths: list[str],
-                      loader_workers: int = 1,
-                      batch_size: int = 256,
-                      use_gpu: bool = True,
-                      master_addr: str = "localhost",
-                      master_port: str = "12345",
-                      backend: str = "nccl",
-                      verbose: bool = True,
-                      ):
+    def batch_predict(
+        self,
+        input_paths: list[str],
+        output_paths: list[str],
+        loader_workers: int = 1,
+        batch_size: int = 256,
+        use_gpu: bool = True,
+        master_addr: str = "localhost",
+        master_port: str = "12345",
+        backend: str = "nccl",
+        verbose: bool = True,
+    ):
 
         # parallelization settings
         if use_gpu and torch.cuda.is_available():
@@ -107,7 +112,8 @@ class DeCTI:
             print("Use CPU")
             backend = "gloo"
         _, rank, local_rank = setup_dist_env(
-            master_addr=master_addr, master_port=master_port)
+            master_addr=master_addr, master_port=master_port
+        )
 
         try:
             # initialize parallelization
@@ -116,7 +122,11 @@ class DeCTI:
                 raise Exception("process group not initialized at rank {}".format(rank))
 
             # assign model to device
-            device = torch.device("cuda:{}".format(local_rank)) if use_gpu else torch.device("cpu")
+            device = (
+                torch.device("cuda:{}".format(local_rank))
+                if use_gpu
+                else torch.device("cpu")
+            )
             ddp_model = self.model.to(device)
             dist.barrier()
             ddp_model = DistributedDataParallel(ddp_model, device_ids=[local_rank])
@@ -124,8 +134,13 @@ class DeCTI:
 
             # load data
             dist.barrier()
-            _, ev_loader, _ = load_data(self.data_manager, input_paths, output_paths,
-                    train=False, num_workers=loader_workers)
+            _, ev_loader, _ = load_data(
+                self.data_manager,
+                input_paths,
+                output_paths,
+                train=False,
+                num_workers=loader_workers,
+            )
 
             # cut into batches
             nbatch_per_img = self.data_manager.nx // batch_size
@@ -147,13 +162,20 @@ class DeCTI:
                         if i_in_img == 0:
                             img_out = torch.squeeze(batch_out, dim=-1)
                         else:
-                            img_out = torch.cat([img_out, torch.squeeze(batch_out, dim=-1)], dim=1)
+                            img_out = torch.cat(
+                                [img_out, torch.squeeze(batch_out, dim=-1)], dim=1
+                            )
 
                     img_out = self.data_manager.post_process(img_out.to("cpu").numpy())
-                    self.data_manager.write(img_out, path_out[0], overwrite=True, verbose=verbose)
+                    self.data_manager.write(
+                        img_out, path_out[0], overwrite=True, verbose=verbose
+                    )
                     if verbose and rank == 0:
-                        print("image {}/{} processed at rank {}".format(
-                                idx + 1, len(ev_loader), rank))
+                        print(
+                            "image {}/{} processed at rank {}".format(
+                                idx + 1, len(ev_loader), rank
+                            )
+                        )
                         sys.stdout.flush()
 
         finally:
