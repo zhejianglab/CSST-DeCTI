@@ -1,12 +1,7 @@
 import math
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from timm.layers import DropPath, trunc_normal_
-
-#######
-# UNITS
-#######
 
 
 class PixelShuffle1D(nn.Module):
@@ -47,7 +42,7 @@ class Upsample1D(nn.Sequential):
                 m.append(nn.Conv1d(num_feat, 2 * num_feat, 3, 1, 1))
                 m.append(PixelShuffle1D(2))
         elif scale == 3:
-            m.append(nn.Conv1d, num_feat, 9 * num_feat, 3, 1, 1)
+            m.append(nn.Conv1d(num_feat, 9 * num_feat, 3, 1, 1))
             m.append(PixelShuffle1D(scale))
         else:
             raise ValueError(
@@ -263,7 +258,7 @@ class BasicLayer(nn.Module):
 
     Args:
         dim (int): Number of input channels.
-        input_resolution (tuple[int]): Input resolution.
+        input_resolution (int): Input resolution.
         depth (int): Number of blocks.
         num_heads (int): Number of attention heads.
         window_size (int): Local window size.
@@ -344,7 +339,7 @@ class RSTB(nn.Module):
 
     Args:
         dim (int): Number of input channels.
-        input_resolution (tuple[int]): Input resolution.
+        input_resolution (int): Input resolution.
         depth (int): Number of blocks.
         num_heads (int): Number of attention heads.
         window_size (int): Local window size.
@@ -356,7 +351,7 @@ class RSTB(nn.Module):
         drop_path (float | tuple[float], optional): Stochastic depth rate. Default: 0.0
         norm_layer (nn.Module, optional): Normalization layer. Default: nn.LayerNorm
         downsample (nn.Module | None, optional): Downsample layer at the end of the layer. Default: None
-        img_size: Input image size.
+        seq_len: Input image size.
         patch_size: Patch size.
     """
 
@@ -501,17 +496,17 @@ class PatchUnEmbed(nn.Module):
 
 
 class DeCTIAbla(nn.Module):
-    r"""DeCTI
+    r"""DeCTIAbla
 
     Args:
-        img_size (int | tuple(int)): Input image size. Default 64
+        seq_len (int): Input image size. Default 9232
         patch_size (int | tuple(int)): Patch size. Default: 1
-        in_chans (int): Number of input image channels. Default: 3
+        in_chans (int): Number of input image channels. Default: 1
         embed_dim (int): Patch embedding dimension. Default: 96
         depths (tuple(int)): Depth of each Swin Transformer layer.
         num_heads (tuple(int)): Number of attention heads in different layers.
-        window_size (int): Window size. Default: 7
-        mlp_ratio (float): Ratio of mlp hidden dim to embedding dim. Default: 4
+        window_size (int): Window size. Default: 64
+        mlp_ratio (float): Ratio of mlp hidden dim to embedding dim. Default: 2.0
         qkv_bias (bool): If True, add a learnable bias to query, key, value. Default: True
         qk_scale (float): Override default qk scale of head_dim ** -0.5 if set. Default: None
         drop_rate (float): Dropout rate. Default: 0
@@ -520,21 +515,18 @@ class DeCTIAbla(nn.Module):
         norm_layer (nn.Module): Normalization layer. Default: nn.LayerNorm.
         ape (bool): If True, add absolute position embedding to the patch embedding. Default: False
         patch_norm (bool): If True, add normalization after patch embedding. Default: True
-        upscale: Upscale factor. 2/3/4/8 for image SR, 1 for denoising and compress artifact reduction
-        img_range: Image range. 1. or 255.
-        upsampler: The reconstruction module. 'pixelshuffle'/'pixelshuffledirect'/'nearest+conv'/None
     """
 
     def __init__(
         self,
-        seq_len=64,
+        seq_len=9232,
         patch_size=1,
         in_chans=1,
         embed_dim=96,
-        depths=[6, 6, 6, 6],
-        num_heads=[6, 6, 6, 6],
-        window_size=4096,
-        mlp_ratio=4.0,
+        depths=(6, 6, 6, 6, 6, 6),
+        num_heads=(6, 6, 6, 6, 6, 6),
+        window_size=64,
+        mlp_ratio=2.0,
         qkv_bias=True,
         qk_scale=None,
         drop_rate=0.0,
@@ -546,7 +538,6 @@ class DeCTIAbla(nn.Module):
         rpe=True,
         residual=True,
         updown_version=2,
-        **kwargs,
     ):
         super(DeCTIAbla, self).__init__()
         num_in_ch = in_chans
@@ -681,7 +672,7 @@ class DeCTIAbla(nn.Module):
 
         expand_len = self.padding_len(seq_len)
 
-        x = F.pad(x, (0, expand_len), "constant", value=0)
+        x = nn.functional.pad(x, (0, expand_len), "constant", value=0)
         return x
 
     def forward_features(self, x):
@@ -701,9 +692,6 @@ class DeCTIAbla(nn.Module):
         return x
 
     def forward(self, x):
-        x = x.permute(
-            1, 2, 0
-        )  # x: [Input_length, Batch, Channel]-> [Batch, C, Input_length]
 
         x = self.check_image_size(x)
 
@@ -719,8 +707,6 @@ class DeCTIAbla(nn.Module):
                 res = self.upsample(res)
             x = self.conv_last(res)
 
-        x = x[:, :, : self.seq_len].permute(
-            2, 0, 1
-        )  # x: [Input_length, Batch, Channel]
+        x = x[:, :, :self.seq_len]  # [Batch, Channel, Input_length]
 
         return x

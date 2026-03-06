@@ -1,21 +1,26 @@
-import glob
-from decti.dataset import load_manager
-from decti.trainer import Trainer
+import os
+import shutil
+
+from decti import init_model, init_manager, Trainer
 
 
 def main():
 
-    data = load_manager('csst_msc_sim')
+    root = os.path.dirname(os.path.abspath(__file__))
+    imgpath = os.path.join(root, 'data')
+    logpath = os.path.join(root, 'log')
+    if 'RANK' not in os.environ or os.environ['RANK'] == 0:
+        if os.path.exists(logpath):
+            shutil.rmtree(logpath)
 
-    flist1 = glob.glob('test_training/cti_v3.3.0/cti/10100059069/CSST_*_WIDE_*_L0_V01.fits')
-    flist2 = glob.glob('test_training/cti_v3.3.0/nocti/10100059069/CSST_*_WIDE_*_L0_V01.fits')
+    manager = init_manager('csst_msc_sim')
+    model, pars = init_model(model_name='DeCTIAbla', seq_len=9232)
+    trainer = Trainer(model, manager, num_workers=4, batch_size=32)
 
-    a = Trainer(flist1, flist2,
-                data_manager=data, model_param={'data_length': data.ny},
-                batch_size=16, loader_workers=2, backend='nccl')
-    a.train(patience=5, log_path='./testdir/log')
-    a.save('./testdir/trained_model.pth')
-
+    flist1 = [os.path.join(imgpath, 'csst_1_cti.fits'), os.path.join(imgpath, 'csst_2_cti.fits')]
+    flist2 = [os.path.join(imgpath, 'csst_1_nocti.fits'), os.path.join(imgpath, 'csst_2_nocti.fits')]
+    trainer.train(flist1, flist2, logpath, n_epochs=15, verbose=True)
+    trainer.save(os.path.join(logpath, 'output.pth'))
 
 if __name__ == '__main__':
     main()
