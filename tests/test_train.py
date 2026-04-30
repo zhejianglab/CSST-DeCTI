@@ -1,20 +1,22 @@
 import glob
-from decti.dataset import load_manager
-from decti.trainer import Trainer
+import os
+from decti import Trainer, init_manager, init_model
 
 
 def main():
 
-    data = load_manager('csst_msc_sim')
+    manager = init_manager('csst_msc_sim')
+    model, pars = init_model(model_name='DeCTIAbla', seq_len=9232)
+    trainer = Trainer(model, manager, num_workers=2, batch_size=16)
 
-    flist1 = glob.glob('test_training/cti_v3.3.0/cti/10100059069/CSST_*_WIDE_*_L0_V01.fits')
-    flist2 = glob.glob('test_training/cti_v3.3.0/nocti/10100059069/CSST_*_WIDE_*_L0_V01.fits')
+    root = os.path.dirname(os.path.abspath(__file__))
+    flist1 = glob.glob(os.path.join(root, 'data', 'csst_*_cti.fits.gz'))
+    flist2 = [f.replace('_cti.fits.gz', '_nocti.fits.gz') for f in flist1]
+    logpath = os.path.join(root, 'log')
+    outpath = os.path.join(root, 'output')
 
-    a = Trainer(flist1, flist2,
-                data_manager=data, model_param={'data_length': data.ny},
-                batch_size=16, loader_workers=2, backend='nccl')
-    a.train(patience=5, log_path='./testdir/log')
-    a.save('./testdir/trained_model.pth')
+    trainer.train(flist1, flist2, logpath, n_epochs=5, verbose=True)
+    trainer.save(os.path.join(outpath, 'test_trained_model.pth'))
 
 
 if __name__ == '__main__':
