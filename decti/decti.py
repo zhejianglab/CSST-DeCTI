@@ -1,4 +1,5 @@
 import os
+import time
 import sys
 import numpy as np
 from tqdm import trange
@@ -8,7 +9,7 @@ import torch.distributed as dist
 from torch.utils.data import DistributedSampler, DataLoader
 from torch.nn.parallel import DistributedDataParallel
 
-from .dataset.dataset import ImageFileDataset
+from .dataset.dataset import PairedImageFileDataset
 from .dataset.manager import DataManager
 from .utils import setup_dist_env
 
@@ -70,18 +71,15 @@ class DeCTI:
         model.eval()
 
         range_func = trange if verbose else range
+        ncol = image.shape[1]
         with torch.no_grad():
-            img_in = np.transpose(self.data_manager.pre_process(image))
-            img_in = np.expand_dims(img_in, axis=1).astype(np.float32)
+            img_in = torch.as_tensor(image).permute(2, 0, 1)  # (ncol, 1, seq_len)
 
-            ncol = img_in.shape[0]
-            if batch_size <= 0:
-                batch_size = ncol
-            nbatch = ncol // batch_size
-            if ncol != nbatch * batch_size:
-                nbatch += 1
+            nbatch_per_img = img_in.shape[0] // batch_size
+            if img_in.shape[0] != nbatch_per_img * batch_size:
+                nbatch_per_img += 1
 
-            for i in range_func(nbatch):
+            for i in range_func(nbatch_per_img):
                 col_start = i * batch_size
                 col_end = min(col_start + batch_size, ncol)
                 batch_in = torch.tensor(img_in[col_start:col_end, :, :], device=device)
@@ -92,9 +90,8 @@ class DeCTI:
                 else:
                     img_out = torch.cat([img_out, torch.squeeze(batch_out, dim=1)], dim=0)
 
-        img_out = img_out.to("cpu").numpy()
-        img_out = np.transpose(img_out)
-        img_out = self.data_manager.post_process(img_out)
+        img_out = self.data_manager.post_process(img_out.to("cpu").numpy())
+        img_out = np.transpose(img_out).astype(float)
 
         return img_out
 
@@ -106,6 +103,7 @@ class DeCTI:
         use_gpu: bool = True,
         num_workers: int = 1,
         verbose: bool = True,
+        print_step: int = 100,
     ):
 
         # check input
@@ -139,35 +137,42 @@ class DeCTI:
 
         # load data
         dist.barrier()
-        dataset = ImageFileDataset(input_paths, output_paths, data_manager=self.data_manager)
+        dataset = PairedImageFileDataset(input_paths, output_paths, self.data_manager, inference_mode=True)
         sampler = DistributedSampler(dataset, shuffle=False, num_replicas=world_size, rank=rank)
-        dataloader = DataLoader(dataset, sampler=sampler, batch_size=batch_size, num_workers=num_workers)
+        dataloader = DataLoader(dataset, sampler=sampler, batch_size=1, num_workers=num_workers)
+        if verbose:
+            if rank == 0:
+                print('Total number of input images: {}'.format(len(dataset)))
+            print("Rank {}: {} images allocated".format(rank, len(dataloader)))
 
         with torch.no_grad():
+            for idx, (image_in, _, meta, _, path_ta) in enumerate(dataloader):
 
-            for idx, (data, meta, path) in enumerate(dataloader):
+                img_in = torch.as_tensor(image_in).permute(2, 0, 1)  # (ncol, 1, seq_len)
+                nbatch_per_img = img_in.shape[0] // batch_size
+                if img_in.shape[0] != nbatch_per_img * batch_size:
+                    nbatch_per_img += 1
+                t0 = time.time()
 
-                img_in = np.expand_dims(np.transpose(data), axis=1).astype(np.float32)  # (n_col, 1, seq_len)
-                ncol = img_in.shape[0]
-                if batch_size <= 0:
-                    batch_size = ncol
-                nbatch = ncol // batch_size
-                if ncol != nbatch * batch_size:
-                    nbatch += 1
+                for i_in_img in range(nbatch_per_img):
+                    col_start = i_in_img * batch_size
+                    col_end = min((i_in_img + 1) * batch_size, img_in.shape[0])
+                    batch_in = img_in[col_start:col_end, :, :].to(device)
 
-                for i in range(nbatch):
-                    col_start = i * batch_size
-                    col_end = min(col_start + batch_size, ncol)
-                    batch_in = torch.tensor(img_in[col_start:col_end, :, :], device=device)
                     batch_out = ddp_model(batch_in)
-                    if i == 0:
+                    if i_in_img == 0:
                         img_out = torch.squeeze(batch_out, dim=1)
                     else:
                         img_out = torch.cat([img_out, torch.squeeze(batch_out, dim=1)], dim=0)
 
+                    if verbose and (idx+1) % print_step == 0:
+                        print('    rank {} image {}/{}: progress {}/{}, {:.2f} min'.format(
+                            rank, idx+1, len(dataloader), i_in_img, nbatch_per_img, (time.time() - t0) / 60))
+
                 img_out = self.data_manager.post_process(img_out.to("cpu").numpy())
                 img_out = np.transpose(img_out).astype(float)
-                self.data_manager.write(img_out, meta, path, overwrite=True, verbose=verbose)
+                meta_out = (meta[0].item(), meta[1].item())
+                self.data_manager.write(img_out, meta_out, path_ta[0], overwrite=True, verbose=verbose)
                 if rank == 0 and verbose:
                     print("Rank {}: {}/{} processed".format(rank, idx + 1, len(dataloader)))
                     sys.stdout.flush()

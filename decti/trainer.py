@@ -132,8 +132,12 @@ class Trainer:
 
         self._init_seeds()
         self._divide_sample(input_paths, target_paths)
+        if self.rank == 0 and verbose:
+            print('Total input files: {}/{} (train/validate)'.format(len(self.train_input), len(self.valid_input)))
         train_loader = self._get_dataloader(self.train_input, self.train_target)
-        valid_loader = self._get_dataloader(self.valid_input, self.valid_target, shuffle=False)
+        valid_loader = self._get_dataloader(self.valid_input, self.valid_target, distributed=True, shuffle=False)
+        if verbose:
+            print('Rank {}: assigned batches: {}/{} (train/validate)'.format(self.rank, len(train_loader), len(valid_loader)))
 
         self.scheduler = OneCycleLR(
             optimizer=self.optimizer,
@@ -152,10 +156,10 @@ class Trainer:
         dist.barrier()
         self.train_losses, self.valid_losses = list(), list()
         for epoch in range(n_epochs):
-            train_loss = self._run_epoch(train_loader, epoch, is_train=True)
+            train_loss = self._run_epoch(train_loader, epoch, is_train=True, verbose=verbose, print_step=30)
             self.train_losses.append(train_loss)
             dist.barrier()
-            valid_loss = self._run_epoch(valid_loader, epoch, is_train=False)
+            valid_loss = self._run_epoch(valid_loader, epoch, is_train=False, verbose=verbose, print_step=100)
             self.valid_losses.append(valid_loss)
 
             # early stopping and best model
@@ -228,18 +232,21 @@ class Trainer:
         self.valid_input = input_paths[n_train:]
         self.valid_target = target_paths[n_train:]
 
-    def _get_dataloader(self, input_paths, target_paths, shuffle=True):
+    def _get_dataloader(self, input_paths, target_paths, distributed=True, shuffle=True):
 
         dataset = ColumnImagePairDataset(input_paths, target_paths, data_manager=self.data_manager)
         if self.model.module.seq_len != len(dataset[0][0]):
             raise Exception("model data_length does not match input image")
 
-        sampler = DistributedSampler(
-            dataset,
-            shuffle=shuffle,
-            num_replicas=self.world_size,
-            rank=self.rank,
-        )
+        if distributed:
+            sampler = DistributedSampler(
+                dataset,
+                shuffle=shuffle,
+                num_replicas=self.world_size,
+                rank=self.rank,
+            )
+        else:
+            sampler = None
         dataloader = DataLoader(
             dataset,
             sampler=sampler,
@@ -249,7 +256,7 @@ class Trainer:
 
         return dataloader
 
-    def _run_epoch(self, loader, epoch, is_train=True):
+    def _run_epoch(self, loader, epoch, is_train=True, verbose=False, print_step=100):
 
         if is_train:
             mode = "train"
@@ -257,11 +264,13 @@ class Trainer:
         else:
             mode = "valid"
             self.model.eval()
-        loader.sampler.set_epoch(epoch)
+        if hasattr(loader.sampler, "set_epoch"):
+            loader.sampler.set_epoch(epoch)
 
         n_batches = len(loader)
         base_step = epoch * n_batches
         epoch_loss = 0
+        t0 = time.time()
         for step, (batch_in, batch_ta, _) in enumerate(loader):
             batch_in = torch.unsqueeze(batch_in.to(self.device), dim=1)
             batch_ta = torch.unsqueeze(batch_ta.to(self.device), dim=1)
@@ -283,6 +292,9 @@ class Trainer:
                 if is_train:
                     current_lr = self.optimizer.param_groups[0]["lr"]
                     self.writer.add_scalar(f"{mode}/lr", current_lr, base_step + step)
+            if verbose and (step + 1) % print_step == 0:
+                print('    epoch {} at rank {} "{}" progress {}/{}, {:.2f} min'.format(
+                    epoch, self.rank, mode, step + 1, n_batches, (time.time() - t0) / 60))
 
         epoch_loss_tensor = torch.tensor([epoch_loss / n_batches], device=self.device)
         dist.all_reduce(epoch_loss_tensor, op=dist.ReduceOp.SUM)
