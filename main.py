@@ -14,7 +14,8 @@ if __name__ == '__main__':
 
     # basic config
     parser.add_argument('--is_training', type=int, default=1, help='0: inference; 1: train;')
-    parser.add_argument('--model', type=str, default='DeCTIAbla', help='DnCNN/DeCTIAbl')
+    parser.add_argument('--model', type=str, default='DeCTIAbla', choices=['DnCNN', 'DeCTIAbla', 'DeCTIMPE'],
+                        help='DeCTIAbla: DeCTI-base; DeCTIMPE: DeCTI-adaptive')
     parser.add_argument('--test_epoch_chpt', type=int, default=-1, help='choose checkpoint id, -1 means best one')
 
     # data loader
@@ -27,7 +28,7 @@ if __name__ == '__main__':
     #data limitation
     parser.add_argument('--half_plane', type=int, default=0, help='each .fits have 4k x 4k image composed of two 2k x 4k half plane, choose to use up half or complete one')
     parser.add_argument('--left_quarter', type=int, default=-1, help='1 use left quarter column part of data for computing acceleration, -1 use right quarter, 0 means all columns')
-    parser.add_argument('--obs_year', type=int, nargs='+', default=[2012], help='use data from single year')
+    parser.add_argument('--obs_year', type=int, nargs='*', default=None, help='optional observation-year filter')
     # parser.add_argument('--obs_year', type=int, nargs='+', default=[2004, 2005, 2006, 2010, 2011, 2012, 2013, 2024], help='use data from single year')
     
     parser.add_argument('--log_path', type=str, default='/mnt/nas/mzh/project/log', help='location of model checkpoints')
@@ -61,6 +62,13 @@ if __name__ == '__main__':
     parser.add_argument('--abla_ape', type=int, default=1, help='valid only when "model=DeCTIAbla"')
     parser.add_argument('--abla_residual', type=int, default=1, help='valid only when "model=DeCTIAbla"')
     parser.add_argument('--abla_patch_size', type=int, default=1, help='')
+
+    # Adaptive positional encoding (DeCTIMPE / DeCTI-adaptive).
+    # Mode 4 is the date-and-column MLP fusion used in the paper.
+    parser.add_argument('--multi_ape', type=int, default=4,
+                        help='DeCTIMPE APE mode: 1=date, 2=column, 3=date+column, 4=date/column MLP fusion')
+    parser.add_argument('--multi_rpe', type=int, default=4,
+                        help='DeCTIMPE RPE mode: 1=date, 2=column, 3=date+column, 4=date/column MLP fusion')
     
     # args = parser.parse_args()
     args, _ = parser.parse_known_args()
@@ -97,12 +105,12 @@ if __name__ == '__main__':
         train_gts, train_lqs, val_gts, val_lqs, test_gts, test_lqs \
         = exp.prepare_dataset(args.config_subpath, obs_year=args.obs_year)
         
-        log_full_path = os.path.join(args.log_path, args.log_sfolder, '/inference_log')
+        log_full_path = os.path.join(args.log_path, args.log_sfolder, 'inference_log')
         
         predict_full_path = os.path.join(args.prediction_path, args.log_sfolder)
         
-        if not loaded_chpt_sfolder == "":
-            model_path = os.path.join(args.log_path, loaded_chpt_sfolder)
+        if args.loaded_chpt_sfolder:
+            model_path = os.path.join(args.log_path, args.loaded_chpt_sfolder)
         else:
             model_path = os.path.join(args.log_path, args.log_sfolder)
             

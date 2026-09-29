@@ -18,6 +18,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 from pipeline.exp_basic import Exp_Basic
 from models.DeCTIAbla import DeCTIAbla
+from models.DeCTIMPE import DeCTIMPE
 from models.DnCNN import DnCNN
 from data_provider.data_factory import data_provider_astro, retrieve_CTI, split_CTI, select_by_temporal, ClassifyByExpo, ClassifyByYear
 from utils.tools import EarlyStopping, adjust_learning_rate, ClockTimer
@@ -33,7 +34,8 @@ class Exp_Main(Exp_Basic):
     def _build_model(self):
         model_dict = {
             'DnCNN': DnCNN,
-            'DeCTIAbla': DeCTIAbla
+            'DeCTIAbla': DeCTIAbla,
+            'DeCTIMPE': DeCTIMPE
         }
 
         if self.args.distributed:
@@ -46,15 +48,13 @@ class Exp_Main(Exp_Basic):
                                     depths=[6, 6, 6, 6, 6, 6], embed_dim=96, num_heads=[6, 6, 6, 6, 6, 6], mlp_ratio=2., \
                                     ape=self.args.abla_ape, rpe=self.args.abla_rpe, residual=self.args.abla_residual).to(self.device)
                 
-                # #4by4
-                # model = model_dict[self.args.model](seq_len=4096, patch_size=self.args.patch_size, in_chans=1, window_size=self.args.window_size, \
-                #     depths=[4, 4, 4, 4], embed_dim=96, num_heads=[6, 6, 6, 6], mlp_ratio=2., \
-                #     ape=self.args.abla_ape, rpe=self.args.abla_rpe, residual=self.args.abla_residual).to(self.device)
-                
-                # #2by2
-                # model = model_dict[self.args.model](seq_len=4096, patch_size=self.args.patch_size, in_chans=1, window_size=self.args.window_size, \
-                #     depths=[2, 2], embed_dim=96, num_heads=[6, 6], mlp_ratio=2., \
-                #     ape=self.args.abla_ape, rpe=self.args.abla_rpe, residual=self.args.abla_residual).to(self.device)
+            elif self.args.model == 'DeCTIMPE':
+                model = model_dict[self.args.model](seq_len=4096, seq_width=self.args.img_width_perchannel,
+                                    patch_size=self.args.abla_patch_size, in_chans=1, window_size=self.args.window_size,
+                                    depths=[6, 6, 6, 6, 6, 6], embed_dim=96, num_heads=[6, 6, 6, 6, 6, 6],
+                                    mlp_ratio=2., ape=self.args.abla_ape, rpe=self.args.abla_rpe,
+                                    residual=self.args.abla_residual, multi_ape=self.args.multi_ape,
+                                    multi_rpe=self.args.multi_rpe).to(self.device)
             else:
                 print("wrong model name in args!")
                 return -1
@@ -62,9 +62,45 @@ class Exp_Main(Exp_Basic):
             print('model architecture:')
             print(model)
             model = nn.SyncBatchNorm.convert_sync_batchnorm(model)
-            model = DDP(model, device_ids=[self.device], output_device=[self.device], find_unused_parameters=True)
+            model = DDP(model, device_ids=[self.args.gpu], output_device=self.args.gpu, find_unused_parameters=True)
+
+        else:
+            if self.args.model == 'DeCTIAbla':
+                model = DeCTIAbla(seq_len=4096, patch_size=self.args.abla_patch_size, in_chans=1,
+                                  window_size=self.args.window_size, depths=[6, 6, 6, 6, 6, 6],
+                                  embed_dim=96, num_heads=[6, 6, 6, 6, 6, 6], mlp_ratio=2.,
+                                  ape=self.args.abla_ape, rpe=self.args.abla_rpe,
+                                  residual=self.args.abla_residual).to(self.device)
+            elif self.args.model == 'DeCTIMPE':
+                model = DeCTIMPE(seq_len=4096, seq_width=self.args.img_width_perchannel,
+                                 patch_size=self.args.abla_patch_size, in_chans=1,
+                                 window_size=self.args.window_size, depths=[6, 6, 6, 6, 6, 6],
+                                 embed_dim=96, num_heads=[6, 6, 6, 6, 6, 6], mlp_ratio=2.,
+                                 ape=self.args.abla_ape, rpe=self.args.abla_rpe,
+                                 residual=self.args.abla_residual, multi_ape=self.args.multi_ape,
+                                 multi_rpe=self.args.multi_rpe).to(self.device)
+            else:
+                model = DnCNN(in_nc=1, out_nc=1, nc=96, nb=20, act_mode='bR').to(self.device)
 
         return model
+
+    def _forward_model(self, batch_x, date_str, col_start, col_end):
+        """Run either paper model while keeping the training loops shared."""
+        if self.args.model == 'DeCTIMPE':
+            if isinstance(date_str, (list, tuple)):
+                date_str = date_str[0]
+            model = self.model.module if self.args.distributed else self.model
+            batch_size = batch_x.shape[1]
+            condition_col = torch.arange(col_start, col_end, device=self.device).unsqueeze(-1)
+            date_idx = model.date_id_mapping(date_str)
+            condition_date = torch.full((batch_size, 1), date_idx, device=self.device,
+                                        dtype=torch.long)
+            condition = torch.cat((condition_col, condition_date), dim=-1)
+            outputs = self.model(batch_x, condition)
+        else:
+            outputs = self.model(batch_x)
+
+        return outputs[0] if isinstance(outputs, tuple) else outputs
 
     def _select_optimizer(self, otype=""):
         if otype == "Adamax":
@@ -107,7 +143,7 @@ class Exp_Main(Exp_Basic):
                     batch_y = log_normalize_tsr(batch_y, min=valmin, max=valmax)
                     
                     # encoder - decoder                   
-                    outputs = self.model(batch_x)
+                    outputs = self._forward_model(batch_x, dftime, col_start, col_end)
 
                     loss = criterion(outputs, batch_y).detach().cpu()
 
@@ -277,7 +313,7 @@ class Exp_Main(Exp_Basic):
                     # encoder - decoder
                     if self.args.rank == 0:
                         print("before model")                   
-                    outputs = self.model(batch_x)
+                    outputs = self._forward_model(batch_x, dftime, col_start, col_end)
                     if self.args.rank == 0:
                         print("after model") 
                     
@@ -366,7 +402,8 @@ class Exp_Main(Exp_Basic):
         else:
             state_dict = torch.load(os.path.join(model_path, f'checkpoint_epoch_{str(checkpts)}.pth'))
 
-        self.model.module.load_state_dict(state_dict)
+        model = self.model.module if self.args.distributed else self.model
+        model.load_state_dict(state_dict)
         print(self.model.state_dict().keys())
         print(state_dict.keys())
 
@@ -414,7 +451,7 @@ class Exp_Main(Exp_Basic):
                     batch_x = log_normalize_tsr(batch_x, min=valmin, max=valmax)
                     batch_y = log_normalize_tsr(batch_y, min=valmin, max=valmax)
             
-                    outputs = self.model(batch_x, 0)
+                    outputs = self._forward_model(batch_x, dftime, col_start, col_end)
 
                     #reverse normalization after inference
                     raw_x = rlog_normalize_tsr(batch_x, valmin, valmax)

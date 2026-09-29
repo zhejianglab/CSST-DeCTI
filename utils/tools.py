@@ -78,6 +78,20 @@ def rlog_normalize_tsr(input, min, max, add=1e2):
         - torch.mul(torch.ones_like(input),add - min) ) / a1
     return rslt
 
+def date_id_mapping(date_str, src_range=('2009-01-01 00:00:00',
+                                         '2025-12-31 23:59:59'), num_bins=34):
+    """Map an observation timestamp to the half-year bin used by DeCTI-adaptive."""
+    date = pd.to_datetime(date_str)
+    start_year = pd.to_datetime(src_range[0]).year
+    end_year = pd.to_datetime(src_range[1]).year
+    expected_bins = 2 * (end_year - start_year + 1)
+    if num_bins != expected_bins:
+        raise ValueError(f'num_bins must be {expected_bins} for half-year IDs, got {num_bins}')
+
+    idx = 2 * (date.year - start_year) + (1 if date.month >= 7 else 0)
+    return max(0, min(idx, num_bins - 1))
+
+
 def get_val_range():
     return  -100, 60000.0
 

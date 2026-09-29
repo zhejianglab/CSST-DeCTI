@@ -8,7 +8,7 @@ MODE="${MODE:-train}"
 PRED_DIR="${PRED_DIR:-${ROOT_DIR}/predictions}"
 LOG_PATH="${LOG_PATH:-${ROOT_DIR}/runs}"
 CONFIG_DIR="${CONFIG_DIR:-${ROOT_DIR}/config/multi_year}"
-RUN_NAME="${RUN_NAME:-decti_base}"
+RUN_NAME="${RUN_NAME:-decti_adaptive}"
 CHECKPOINT_RUN="${CHECKPOINT_RUN:-}"
 NPROC_PER_NODE="${NPROC_PER_NODE:-1}"
 BATCH_SIZE="${BATCH_SIZE:-64}"
@@ -28,7 +28,7 @@ cd "${ROOT_DIR}"
 
 torchrun --standalone --nproc_per_node="${NPROC_PER_NODE}" main.py \
     --is_training "${IS_TRAINING}" \
-    --model DeCTIAbla \
+    --model DeCTIMPE \
     --data_path "${DATA_DIR}" \
     --prediction_path "${PRED_DIR}" \
     --redivide_files 0 \
@@ -52,4 +52,6 @@ torchrun --standalone --nproc_per_node="${NPROC_PER_NODE}" main.py \
     --abla_ape 1 \
     --abla_residual 1 \
     --abla_patch_size 1 \
+    --multi_ape 4 \
+    --multi_rpe 4 \
     2>&1 | tee "${LOG_PATH}/${RUN_NAME}/${MODE}.log"

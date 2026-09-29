@@ -1,97 +1,198 @@
-# DeCTI: Transformer-based Charge Transfer Inefficiency correction for CSST
+# DeCTI: Transformer-based Charge Transfer Inefficiency Correction
 
-## 1. Introduction
-Charge Transfer Inefficiency (CTI) is a common defect in Charge-Coupled Device (CCD) imaging sensors, leading to charge trailing and signal distortion in astronomical images. The Chinese Space Station Telescope (CSST) acquires roughly two million images annually, all of which require CTI correction——posing an urgent demand for a solution that is both accurate and computationally efficient.
+Official implementation of **DeCTI**, a supervised deep-learning framework for column-wise charge transfer inefficiency (CTI) correction in astronomical CCD images.
 
-To address this challenge, we introduce **DeCTI**, a novel supervised deep learning pipeline designed to effectively mitigate CTI artifacts in astronomical images. As illustrated in the figures below, DeCTI restores the degraded raw image (left) to a high-fidelity reconstruction (middle) that closely matches the “ground truth” image (right). Compared with traditional state-of-the-art approaches, DeCTI achieves approximately **2× higher correction accuracy** and is over **100× faster**, enabling large-scale and high-fidelity image restoration.
+This repository contains both models described in the manuscript:
 
-<div align="center">
-<img src="figs/vis_lq.png" width="23%" title="RAW"> <img src="figs/vis_pr.png" width="23%" title="prediction"> <img src="figs/vis_gt.png" width="23%" title="ground truth"> 
-</div>
+| Paper name | Code class | Entry script | Positional encoding |
+|---|---|---|---|
+| **DeCTI-base** | `DeCTIAbla` | `baseline.sh` | One APE and RPE shared by all samples |
+| **DeCTI-adaptive** | `DeCTIMPE` | `adaptive.sh` | Observation-epoch- and detector-column-conditioned APE and RPE |
 
-## 2. Architecture
-The DeCTI architecture integrates convolutional layers for local feature extraction with Transformer encoders to model long-range charge trailing patterns. Key design highlights:
+The research class names are kept unchanged for checkpoint and code compatibility.
 
-- Reformulating CTI correction as a 1-D sequence-to-sequence task by treating each column vector as an independent sample.
+## Method
 
-- Introducing a custom normalization method tailored to astronomical image distributions to stabilize and accelerate training.
+DeCTI reformulates CTI correction as a 1-D sequence-to-sequence restoration problem. Each detector column is treated as one sample. Convolutional layers extract local features, while fixed-window Transformer blocks model longer-range charge-trailing dependencies.
 
-- Employing a hybrid architecture that combines CNN layers and 1-D Transformer encoders within fixed processing windows.
+<p align="center">
+  <img src="figs/decti_base_pipeline.png" width="90%" alt="DeCTI-base architecture">
+</p>
+<p align="center"><em>DeCTI-base training and inference pipeline.</em></p>
 
-<div align="center">
-<img src="figs/DeCTI.png" width="80%" title="Architecture">
-</div>
+### DeCTI-base
 
-## 3. Evaluation Metrics
-### Removal Ratio
-We define the **removal ratio**, a custom metric designed to quantify residual CTI artifacts on a column-wise basis. It measures the fraction of remaining error after correction——**lower values indicate better performance**. From the distribution of removal ratio across multiple samples, we derive **bias** and **dispersion** metrics, which respectively characterize the central tendency and spread of the removal ratio distribution, reflecting both the accuracy and stability of the correction.
+For an uncorrected HST/ACS `flt.fits` image, arrays from FITS extensions 1 and 4 are concatenated into a (4096 × 4096) image. Its 4096 columns are processed as independent length-4096 sequences. The paired, pipeline-corrected `flc.fits` image supplies the supervision target. Training minimizes mean squared error in the normalized domain; inference reverses the normalization and reconstructs the two FITS science extensions.
 
-<div align="center">
-<img src="figs/bias_rratio.png" width="40%" title="bias metrics"> <img src="figs/var_rratio.png" width="40%" title="dispersion metrics">  
-</div>
+### DeCTI-adaptive
 
-### Relative Photometry Error
-**Relative photometry error** is a standard astronomical metric that quantifies the flux deviation relative to the ground-truth flux on cropped 2-D image stamps. Models are trained and inferred separately on Hubble Space Telescope (HST) images observed in 2005 and 2012. Two flux-measurement methods—**Aperture** and **Kron**—are adopted for comparison. 
+CTI degradation changes with detector age and detector location. DeCTI-adaptive retains the DeCTI-base backbone and conditions both absolute and relative positional encodings on:
 
-The error distributions for multiple objects are shown below. The horizontal axis denotes the ground-truth flux, while the dots and lines on the vertical axis represent the bias and standard deviation of the relative photometry error, respectively. From left to right, the panels correspond to: (a) Aperture flux (2005 data), (b) Aperture flux (2012 data), (c) Kron flux (2005 data), and (d) Kron flux (2012 data).
+- an observation-epoch ID: 34 half-year bins from 2009 through 2025; and
+- a detector-column ID: 64 bins, each covering 64 of the 4096 columns.
 
-<div align="center">
-<img src="figs/flux_aperture.png" width="40%" title="aperture flux"> <img src="figs/flux_kron.png" width="40%" title="kron flux">
-</div>
+For both APE and RPE, the selected date and column embeddings are concatenated and fused by an MLP (`--multi_ape 4 --multi_rpe 4`).
 
-### Speed
-The table below compares the runtime performance of two existing state-of-the-art methods, SimpleCTI and arCTIc (both running on a single-core CPU), with our DeCTI model tested on 4 GPUs and 16 GPUs, respectively.
-The rightmost column shows the average time per image, including both computation and I/O operations.
+<p align="center">
+  <img src="figs/decti_adaptive_pipeline.png" width="90%" alt="Adaptive positional encoding">
+</p>
+<p align="center"><em>Observation-epoch- and detector-column-conditioned APE and RPE in DeCTI-adaptive.</em></p>
 
-<div align="center">
-<img src="figs/time_consuming.jpeg" width="80%" title="aperture flux">
-</div>
+The training and inference data flow is the same for both models. The only additional inference inputs for DeCTI-adaptive are `DATE-OBS` / `TIME-OBS` from the FITS header and the column index; no corrected reference image is used by the model at inference time.
 
-## 4. Dataset
-Each model is trained on **public-domain** Hubble Space Telescope (HST) observations from a single year, obtained with the ACS camera using the F814W optical filter. Filenames used for training, validation, and testing are listed in the corresponding files: [train](config/remove_j92t/train.csv)↗ [validation](config/remove_j92t/val.csv)↗ [test](config/remove_j92t/test.csv)↗. The images can be downloaded using their ```observation_id``` via  [astroquery](https://astroquery.readthedocs.io/en/latest/esa/hubble/hubble.html)↗.
+## Results overview
 
-## 5. Dependency
-All software dependencies required to run the project are listed in [environment.yaml](environment.yaml)↗. To create or update the Conda environment, run the following command:
+Both models reduce CTI-induced deviations relative to uncorrected images. On the multi-year experiment, DeCTI-adaptive is designed to provide more stable behavior across observation epochs by explicitly modeling temporal and spatial detector conditions.
+
+<p align="center">
+  <img src="figs/decti_multiyear_results.png" width="68%" alt="Multi-year removal-ratio results">
+</p>
+<p align="center"><em>Multi-year comparison using the CTI-specific removal-ratio metrics. Lower is better.</em></p>
+
+Example restoration:
+
+<p align="center">
+  <img src="figs/vis_lq.png" width="30%" alt="Uncorrected input">
+  <img src="figs/vis_pr.png" width="30%" alt="DeCTI prediction">
+  <img src="figs/vis_gt.png" width="30%" alt="Reference target">
+</p>
+<p align="center"><em>Uncorrected input (left), DeCTI prediction (middle), and reference target (right).</em></p>
+
+The manuscript additionally evaluates photometric, morphological, astrometric, image-quality, and CTI-specific diagnostics. Since real observations do not provide an exact CTI-free reference, the calibrated HST `flc.fits` products are used as reference targets; this limitation should be considered when interpreting the results.
+
+## Installation
+
+Create the provided Conda environment:
 
 ```bash
 conda env update -f environment.yaml
-```  
+conda activate base
+```
 
-Please note that the environment includes all third-party libraries used in this work, including ```tensorboard```, ```pytorch```, ```numpy```, ```matplotlib```, ```pandas```, ```fitsio```, ```scikit-learn```, ```seaborn```, ```astroquery```, etc, all of which are essential for model development and evaluation. Users are encouraged to respect the respective licenses when using these tools.
+The main dependencies include PyTorch, timm, NumPy, pandas, Astropy, fitsio, scikit-learn, matplotlib, seaborn, and TensorBoard.
 
-## 6. File Structure
-Below is the directory structure of this repository. It provides an overview of the main scripts and configuration files used in the project.
+## Data
 
-```latex
-csst-DeCTI/
-|
-├── baseline.sh            # Script for training or inference
-├── config                 # Configuration files listing dataset filenames
-│   └── remove_j92t
-│       ├── test.csv
-│       ├── train.csv
-│       └── val.csv
-├── data_provider          # I/O modules for data loading and organization
-│   ├── data_factory.py
-│   ├── data_loader.py
-├── environment.yaml       # Conda environment configuration
+The experiments use public HST/ACS F814W observations from MAST. For every exposure, place the paired files under the same observation directory:
+
+```text
+/path/to/HST_F814W/
+└── <observation_id>/
+    ├── <observation_id>_flt.fits   # uncorrected model input
+    └── <observation_id>_flc.fits   # supervised reference target
+```
+
+The repository provides relative-path CSV manifests:
+
+- `config/multi_year/`: the paper's balanced multi-year split (600 train, 163 validation, 1367 test entries);
+- `config/remove_j92t/`: the legacy split retained for compatibility.
+
+Each CSV contains `date`, `gt`, and `lq` columns. The listed data are not redistributed by this repository. They can be downloaded from MAST using the observation IDs in the relative paths, for example with [astroquery](https://astroquery.readthedocs.io/en/latest/esa/hubble/hubble.html).
+
+## Training
+
+All paths are configured through environment variables. A single-GPU run uses `NPROC_PER_NODE=1`; increase it for single-node distributed training.
+
+DeCTI-base:
+
+```bash
+DATA_DIR=/path/to/HST_F814W \
+NPROC_PER_NODE=1 \
+MODE=train \
+./baseline.sh
+```
+
+DeCTI-adaptive:
+
+```bash
+DATA_DIR=/path/to/HST_F814W \
+NPROC_PER_NODE=1 \
+MODE=train \
+./adaptive.sh
+```
+
+Useful overrides include `CONFIG_DIR`, `LOG_PATH`, `PRED_DIR`, `RUN_NAME`, and `BATCH_SIZE`. The scripts use the paper configuration: patch size 1, attention-window size 64, six residual Transformer groups with six layers each, embedding width 96, and MSE loss.
+
+## Inference
+
+Set `MODE=infer` and point `CHECKPOINT_RUN` to a run directory below `LOG_PATH`. If it is omitted, the script loads the checkpoint from `RUN_NAME`.
+
+```bash
+# DeCTI-base
+DATA_DIR=/path/to/HST_F814W \
+LOG_PATH=/path/to/runs \
+CHECKPOINT_RUN=decti_base \
+MODE=infer \
+BATCH_SIZE=512 \
+./baseline.sh
+
+# DeCTI-adaptive
+DATA_DIR=/path/to/HST_F814W \
+LOG_PATH=/path/to/runs \
+CHECKPOINT_RUN=decti_adaptive \
+MODE=infer \
+BATCH_SIZE=512 \
+./adaptive.sh
+```
+
+Checkpoints are expected at `<LOG_PATH>/<CHECKPOINT_RUN>/checkpoint.pth`. Predictions are written below `<PRED_DIR>/<RUN_NAME>/`.
+
+## Direct entry point
+
+The scripts are thin wrappers around `main.py`. The key model selections are:
+
+```bash
+# DeCTI-base
+torchrun --standalone --nproc_per_node=1 main.py \
+  --model DeCTIAbla --multi_ape 4 --multi_rpe 4 ...
+
+# DeCTI-adaptive
+torchrun --standalone --nproc_per_node=1 main.py \
+  --model DeCTIMPE --multi_ape 4 --multi_rpe 4 ...
+```
+
+The `multi_ape` and `multi_rpe` arguments are used only by `DeCTIMPE`; they are accepted in the base command to keep shared launch configurations simple.
+
+## Repository structure
+
+```text
+CSST-DeCTI/
+├── adaptive.sh                 # DeCTI-adaptive training/inference
+├── baseline.sh                 # DeCTI-base training/inference
+├── config/
+│   ├── multi_year/             # paper multi-year data split
+│   └── remove_j92t/            # legacy split
+├── data_provider/              # FITS datasets and data factories
+├── figs/                       # manuscript and evaluation figures
+├── models/
+│   ├── DeCTIAbla.py            # DeCTI-base (compatibility class name)
+│   ├── DeCTIMPE.py             # DeCTI-adaptive (compatibility class name)
+│   └── DnCNN.py
+├── pipeline/
+│   ├── exp_basic.py
+│   └── exp_main.py
+├── utils/tools.py
+├── environment.yaml
 ├── LICENSE
-├── main.py                # Main entry point of the project
-├── models                 # Model architectures
-│   ├── DeCTIAbla.py       # Core DeCTI model
-│   ├── DnCNN.py           # Other SOTA methods
-├── pipeline               # Training and evaluation pipelines
-│   ├── exp_basic.py       # Project initialization
-│   ├── exp_main.py        # Main experiment workflow
-├── utils/                 # Utility functions
-│   └── tools.py
+├── main.py
 └── README.md
 ```
 
-## 7. License
-This code repository are licensed under the [Apache License 2.0](https://github.com/zhejianglab/CSST-DeCTI/blob/main/LICENSE). The HST data hosted at MAST used in this work are in the public domain and are free to use. Users should note, however, that other data hosted at MAST may be subject to specific use restrictions, and compliance with any applicable license terms is required.
+## Citation
 
-## 8. Citation and Acknowledgements
-This work is based on observations made with the **NASA/ESA Hubble Space Telescope**, obtained from the **Mikulski Archive for Space Telescopes (MAST)**. The Space Telescope Science Institute (STScI), which operates the HST and manages the MAST archive, is operated by the Association of Universities for Research in Astronomy, Inc. (AURA) under NASA contract NAS5-26555. STScI provides the scientific support, data processing, and archival services that make HST data publicly accessible.
+If this code is useful in your research, please cite the manuscript:
 
-This work is also supported by the **China Manned Space Program** through its Space Application System.
+```bibtex
+@article{men2026decti,
+  title   = {DeCTI: Transformer-based Charge Transfer Inefficiency correction},
+  author  = {Men, Zehua and Shao, Li and Li, Guoliang and Duan, Manni},
+  year    = {2026},
+  note    = {Manuscript}
+}
+```
+
+## Acknowledgements and license
+
+This work is based on observations made with the NASA/ESA Hubble Space Telescope and obtained from the Mikulski Archive for Space Telescopes (MAST). It is also supported by the China Manned Space Program through its Space Application System.
+
+The source code is released under the [Apache License 2.0](LICENSE). HST data hosted by MAST are not included in this repository and remain subject to their applicable data policies.
